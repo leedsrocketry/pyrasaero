@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
 """Convert cumulative RASAero II aeroplots into per-component LFS tables.
 
-The aeroplots CSVs in ``rasaero-export-tool/rasaero-data/`` are *cumulative*
-RASAero configurations (vehicle built up to and including that component).
-This script differences successive assemblies to extract individual component
-contributions, following the algorithm in ``rasaero-export-tool/rasaero.py``.
+The aeroplots CSVs in ``rasaero-data/`` are *cumulative* RASAero
+configurations (vehicle built up to and including that component).
+This script differences successive assemblies to extract individual
+component contributions.
 
 Processing:
   - For each altitude file, load all 5 assemblies and difference positionally
@@ -14,7 +13,7 @@ Processing:
   - Convert CP from inches to metres
   - CP moment balance uses CNAlpha to avoid division by zero at AoA=0
 
-Output: one 8-column CSV per component in ``aero_tables/``.
+Output: one 8-column CSV per component in ``aero-tables/``.
 """
 
 from __future__ import annotations
@@ -22,21 +21,13 @@ from __future__ import annotations
 import csv
 import re
 import statistics
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 INCHES_TO_M = 0.0254
-INCHES_TO_MM = 25.4
 MACH_TOL = 0.005
 MACH_STEP = 0.1
 MACH_MAX = 5.0
 CNALPHA_EPS = 1.0e-6
-
-PYRASAERO_ROOT = Path(__file__).resolve().parent.parent
-LFS_ROOT = PYRASAERO_ROOT.parent / "leeds-flight-simulator"
-SRC_DIR = PYRASAERO_ROOT / "rasaero-data"
-CDX1_PATH = LFS_ROOT / "simulations" / "g2b2-safety-case" / "g2b2.CDX1"
-DST_DIR = LFS_ROOT / "simulations" / "g2b2-safety-case" / "aero_tables"
 
 # RASAero CSV column indices (15-column aeroplot format)
 COL_MACH = 0
@@ -53,19 +44,8 @@ COL_RE = 14
 AFT_COMPONENT_ORDER = ("BoatTail", "Fin", "FinCan", "BodyTube", "NoseCone")
 
 # Row layout used internally (8 columns).
-# Index 6 (CNAlpha) is used for CP moment balance then dropped on output.
 I_MACH, I_RE, I_AOA = 0, 1, 2
 I_CA_OFF, I_CA_ON, I_CN, I_CNA, I_CP = 3, 4, 5, 6, 7
-
-
-def _parse_vehicle_length_mm(cdx1_path: Path) -> float:
-    """Return the total vehicle length in mm from the CDX1 file."""
-    tree = ET.parse(cdx1_path)
-    design = tree.getroot().find("RocketDesign")
-    nose = float(design.findtext("NoseCone/Length")) * INCHES_TO_MM
-    body = float(design.findtext("BodyTube/Length")) * INCHES_TO_MM
-    boat = float(design.findtext("BoatTail/Length")) * INCHES_TO_MM
-    return nose + body + boat
 
 
 def _is_mach_on_grid(mach: float) -> bool:
@@ -80,7 +60,6 @@ def _load_altitude_file(path: Path) -> list[list[float]]:
     """Load one aeroplots CSV, filter Mach, extract 8 columns.
 
     Returns rows as [Mach, Re, AoA, CA_off, CA_on, CN, CNAlpha, CP_inches].
-    Rows are in CSV order (Mach ascending, then AoA ascending within Mach).
     CP is kept in inches here; conversion to metres happens later.
     """
     rows: list[list[float]] = []
@@ -109,31 +88,40 @@ def _load_altitude_file(path: Path) -> list[list[float]]:
     return rows
 
 
-def _find_altitude_files(component: str) -> list[tuple[int, Path]]:
+def _find_altitude_files(src_dir: Path, component: str) -> list[tuple[int, Path]]:
     """Return sorted (altitude_ft, path) pairs for one component."""
     pattern = re.compile(
         rf"^aeroplots-{re.escape(component)}-(\d+)\.csv$", re.IGNORECASE,
     )
     hits: list[tuple[int, Path]] = []
-    for p in SRC_DIR.iterdir():
+    for p in src_dir.iterdir():
         m = pattern.match(p.name)
         if m:
             hits.append((int(m.group(1)), p))
     return sorted(hits)
 
 
-def main() -> None:
-    if not SRC_DIR.is_dir():
-        raise SystemExit(f"Source directory not found: {SRC_DIR}")
-    if not CDX1_PATH.is_file():
-        raise SystemExit(f"CDX1 file not found: {CDX1_PATH}")
+def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
+    """Run the conversion pipeline.
 
-    vehicle_len_mm = _parse_vehicle_length_mm(CDX1_PATH)
-    print(f"Vehicle length: {vehicle_len_mm:.1f} mm "
-          f"({vehicle_len_mm / INCHES_TO_MM:.2f} in)")
+    Parameters
+    ----------
+    cfg
+        A ``PyrasaeroConfig`` instance (from ``config.load_config``).
+    whole_vehicle
+        If True, output a single whole-vehicle CSV (BoatTail assembly only).
+    """
+    src_dir = cfg.vehicle_yaml_dir / "rasaero-data"
+    dst_dir = cfg.aero_tables_dir
+    vehicle_len_mm = cfg.components.length_mm
+
+    if not src_dir.is_dir():
+        raise SystemExit(f"Source directory not found: {src_dir}")
+
+    print(f"Vehicle length: {vehicle_len_mm:.1f} mm")
 
     # Discover altitude files — use BoatTail (full vehicle) as reference
-    alt_files_ref = _find_altitude_files("BoatTail")
+    alt_files_ref = _find_altitude_files(src_dir, "BoatTail")
     altitudes = [alt for alt, _ in alt_files_ref]
     print(f"Altitudes: {len(altitudes)} ({altitudes[0]}..{altitudes[-1]} ft)")
 
@@ -141,19 +129,19 @@ def main() -> None:
     fore_to_aft = list(reversed(AFT_COMPONENT_ORDER))
     comp_alt_files: dict[str, dict[int, Path]] = {}
     for comp in fore_to_aft:
-        af = _find_altitude_files(comp)
+        af = _find_altitude_files(src_dir, comp)
         comp_alt_files[comp] = {alt: path for alt, path in af}
         missing = set(altitudes) - set(comp_alt_files[comp])
         if missing:
             print(f"  WARNING: {comp} missing altitudes: {sorted(missing)}")
 
-    DST_DIR.mkdir(parents=True, exist_ok=True)
+    dst_dir.mkdir(parents=True, exist_ok=True)
 
     # Accumulate per-component rows across all altitudes
     comp_output: dict[str, list[list[float]]] = {c: [] for c in fore_to_aft}
 
     for alt_ft in altitudes:
-        # Load all assemblies at this altitude, maintaining row order
+        # Load all assemblies at this altitude
         asm_data: dict[str, list[list[float]]] = {}
         for comp in fore_to_aft:
             path = comp_alt_files[comp].get(alt_ft)
@@ -237,7 +225,7 @@ def main() -> None:
         rows.sort(key=lambda r: (r[I_MACH], r[I_RE], r[I_AOA]))
 
         # Write CSV — 8 columns, CN_alpha_per_rad appended after CP_m
-        dst_path = DST_DIR / f"{comp}.csv"
+        dst_path = dst_dir / f"{comp}.csv"
         with open(dst_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["Mach", "Reynolds", "AoA_deg",
@@ -246,15 +234,14 @@ def main() -> None:
                 writer.writerow([r[0], r[1], r[2], r[3], r[4], r[5], r[7], r[6]])
 
         extra = f" (filled {filled})" if filled else ""
-        print(f"  {comp:>10}: {len(rows)} rows{extra} -> "
-              f"{dst_path.relative_to(REPO_ROOT)}")
+        print(f"  {comp:>10}: {len(rows)} rows{extra} -> {dst_path}")
 
     # --- Verification ---
     print("\n--- Verification (CA_off sum at M=0.5, AoA=0) ---")
     ca_sum = 0.0
     cn_sum = 0.0
     for comp in fore_to_aft:
-        p = DST_DIR / f"{comp}.csv"
+        p = dst_dir / f"{comp}.csv"
         with open(p, newline="") as f:
             reader = csv.reader(f)
             next(reader)
@@ -268,7 +255,7 @@ def main() -> None:
 
     print("\n--- Verification (CN sum at M=0.5, AoA=2) ---")
     for comp in fore_to_aft:
-        p = DST_DIR / f"{comp}.csv"
+        p = dst_dir / f"{comp}.csv"
         with open(p, newline="") as f:
             reader = csv.reader(f)
             next(reader)
@@ -281,7 +268,3 @@ def main() -> None:
     print(f"  {'SUM':>10}: CN = {cn_sum:.6f}")
 
     print("\nDone.")
-
-
-if __name__ == "__main__":
-    main()

@@ -4,24 +4,11 @@ Automates RASAero II to export per-altitude aeroplot data for a rocket, then con
 
 ---
 
-## Table of Contents
-
-- [Background](#background)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Usage](#usage)
-- [Input Files](#input-files)
-- [Output Files](#output-files)
-- [Contact](#contact)
-- [Licence](#licence)
-
----
-
 ## Background
 
-LFS requires aerodynamic data as per-component tables — one CSV per component (nosecone, body tube, fin set, boattail, etc.) covering a grid of Mach number, Reynolds number, and angle of attack. RASAero II does not export this directly; it exports cumulative assembly data, where each export includes the contribution of all components from the nose down to that point.
+LFS requires aerodynamic data as per-component tables -- one CSV per component (nosecone, body tube, fin set, boattail, etc.) covering a grid of Mach number, Reynolds number, and angle of attack. RASAero II does not export this directly; it exports cumulative assembly data, where each export includes the contribution of all components from the nose down to that point.
 
-pyrasaero bridges this gap. It drives RASAero II via GUI automation (pywinauto and keyboard) to export aeroplot CSVs at multiple altitudes, then converts the cumulative exports into per-component tables by successive differencing. The resulting CSVs are written directly to the LFS simulation's `aero_tables/` directory.
+pyrasaero bridges this gap. It reads a simulation YAML (shared with LFS), follows the vehicle YAML reference to get the vehicle geometry, generates a CDX1 file, drives RASAero II via GUI automation (pywinauto and keyboard) to export aeroplot CSVs at multiple altitudes, then converts the cumulative exports into per-component tables by successive differencing. The resulting CSVs are written to `aero-tables/` next to the vehicle YAML.
 
 Built for the Gryphon II Block II (G2B2) campaign by the Leeds University Rocketry Association (LURA).
 
@@ -31,86 +18,67 @@ Built for the Gryphon II Block II (G2B2) campaign by the Leeds University Rocket
 **Prerequisites:** Python 3.10+, Windows, RASAero II installed.
 
 ```
-git clone git@github.com:leedsrocketry/pyrasaero.git
-cd pyrasaero
-pip install -e .
+pip install click pyyaml numpy pandas scipy pywinauto keyboard opencv-python Pillow
 ```
-
-Or install dependencies directly:
-
-```
-pip install numpy pandas scipy pywinauto keyboard opencv-python Pillow matplotlib
-```
-
-
-## Quick Start
-
-**Step 1 — Export aeroplots from RASAero II:**
-
-```
-pyrasaero
-```
-
-Opens RASAero II, loads the CDX1 file, and exports aeroplot CSVs for each component at each configured altitude. CSVs are saved to `rasaero-data/`.
-
-**Step 2 — Convert to LFS aero tables:**
-
-```
-pyrasaero-convert
-```
-
-Reads the exported CSVs, differences cumulative assemblies to isolate per-component contributions, and writes one CSV per component to the LFS `aero_tables/` directory.
 
 
 ## Usage
 
-### Exporting Aeroplots
+### Full pipeline
 
 ```
-pyrasaero
+python -m pyrasaero run <simulation.yaml>
 ```
 
-Requires RASAero II to be installed and the CDX1 file to be present at the configured path. The script drives the RASAero II GUI — do not interact with the machine while it runs.
+Reads the simulation YAML, generates a CDX1 from the vehicle config, drives RASAero II to export aeroplots at each altitude, then converts the cumulative exports into per-component LFS aero tables.
 
-Motor and altitude configuration is defined in `pyrasaero/cli.py`. Edit the motor definitions and altitude list there before running.
+**Flags:**
 
-### Converting to LFS Tables
+| Flag | Effect |
+|------|--------|
+| `--convert-only` | Skip RASAero export; only convert existing CSVs in `rasaero-data/` |
+| `--whole-vehicle` | Output a single whole-vehicle aero table instead of per-component |
+| `--altitude-step` `FLOAT` | Altitude grid spacing in metres (default 2000) |
+| `--max-altitude` `FLOAT` | Maximum altitude in metres (default 20000) |
+
+### Write CDX1 only
 
 ```
-pyrasaero-convert
+python -m pyrasaero write-cdx1 <simulation.yaml>
 ```
 
-Reads from `rasaero-data/` (relative to the pyrasaero repo root) and writes to `../leeds-flight-simulator/simulations/g2b2-safety-case/aero_tables/`. Both paths are configured at the top of `pyrasaero/convert.py`.
-
-Prints a verification summary on completion — the sum of per-component CA and CN values at representative conditions should match the full-vehicle values from RASAero.
+Generates a CDX1 file from the vehicle and simulation config without running RASAero. Useful for manual inspection or development.
 
 
 ## Input Files
 
-### CDX1 File (`.CDX1`)
+### Simulation YAML
 
-RASAero II's native project file. Contains vehicle geometry, motor selection, and simulation configuration. Used by both the automation script (to configure each run) and the converter (to read vehicle length for CP unit conversion).
+The same simulation YAML that drives LFS (e.g. `cape-wrath.yaml`). Must contain:
 
-Path is configured in `pyrasaero/cli.py` and `pyrasaero/convert.py`.
+- `vehicle` -- path to the vehicle YAML (relative to this file)
+- `site.elevation`, `launch.rail.length`, etc. -- pyrasaero reads existing LFS fields
+- `rasaero.modified_barrowman`, `rasaero.turbulence` -- RASAero-specific simulation flags
 
-### Aeroplot CSVs
+### Vehicle YAML
 
-Raw exports from RASAero II's aeroplot function. One CSV per component per altitude, named `aeroplots-{Component}-{altitude_ft}.csv`. Stored in `rasaero-data/` after running `pyrasaero`.
+The shared vehicle YAML (e.g. `g2b2-o3400.yaml`). pyrasaero reads:
 
-Each file is a 15-column RASAero II aeroplot export. The converter reads Mach, Reynolds, AoA, CA (power-off), CA (power-on), CN, CN_alpha, and CP.
+- `body_diameter_mm`, `nozzle_diameter_mm` -- top-level vehicle dimensions
+- `components` -- nested component geometry (nosecone, body_tube, boattail, fins), ordered forward-to-aft
+- `mass` -- wet mass and CG
+- `rasaero` -- surface finish, colour, RASAero motor name
 
 ### GUI Reference Screenshots
 
-`pyrasaero/gui-pics/` contains reference screenshots used by the OpenCV-based GUI automation to locate UI elements in RASAero II. These must match the installed version of RASAero II. If automation fails, compare the screenshots against the actual RASAero II UI and recapture if necessary.
+`gui-pics/` contains reference screenshots used by the OpenCV-based GUI automation to locate UI elements in RASAero II. These must match the installed version of RASAero II.
 
 
 ## Output Files
 
 ### Aero Table CSVs
 
-One CSV per aerodynamic component, written to the LFS `aero_tables/` directory.
-
-**Column layout:**
+One CSV per aerodynamic component, written to `aero-tables/` next to the vehicle YAML.
 
 | Column | Description |
 |--------|-------------|
@@ -121,25 +89,10 @@ One CSV per aerodynamic component, written to the LFS `aero_tables/` directory.
 | `CA_on` | Axial force coefficient, motor on |
 | `CN` | Normal force coefficient |
 | `CP_m` | Centre of pressure, metres from nose tip |
-| `CN_alpha_per_rad` | Normal force slope (1/rad), averaged over the linear AoA regime (≤ 5°) |
-
-These files are consumed directly by LFS. After running `pyrasaero-convert`, copy or link the `aero_tables/` directory to the relevant LFS simulation directory and update the `aero_tables` path in `vehicle.yaml`.
-
-
-## Related Tools
-
-| Tool | Purpose |
-|------|---------|
-| [leeds-flight-simulator](https://github.com/leedsrocketry/leeds-flight-simulator) | 6DoF Monte Carlo flight simulator that consumes the aero tables pyrasaero produces |
-| [windgen](https://github.com/leedsrocketry/windgen) | Generates the wind profile ensembles for LFS |
+| `CN_alpha_per_rad` | Normal force slope (1/rad) |
 
 
 ## Contact
 
-- **Toby Thomson** — el21tbt@leeds.ac.uk, me@tobythomson.co.uk
-- **LURA Team** — launch@leedsrocketry.co.uk
-
-
-## Licence
-
-<!-- TODO: Add licence information -->
+- **Toby Thomson** -- el21tbt@leeds.ac.uk, me@tobythomson.co.uk
+- **LURA Team** -- launch@leedsrocketry.co.uk

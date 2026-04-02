@@ -6,3 +6,5 @@ build/
 .venv/
 .claude/
 CLAUDE.md
+rasaero-data/
+*.CDX1

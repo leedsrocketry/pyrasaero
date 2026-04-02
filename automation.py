@@ -13,12 +13,16 @@ except ImportError:
     GuiAuto = None  # gui_automation not available
 from pywinauto.application import Application
 from pywinauto import Desktop
-from scipy.interpolate import NearestNDInterpolator, LinearNDInterpolator
 import numpy as np
 import os
 
 RASAeroPath = "C:\\Program Files (x86)\\RASAero II\\RASAero II.exe"
-RASAeroGUIImages = ("gui-pics\\0A.png", "gui-pics\\1A.png", "gui-pics\\2A.png")
+_HERE = Path(__file__).resolve().parent
+RASAeroGUIImages = (
+    str(_HERE / "gui-pics" / "0A.png"),
+    str(_HERE / "gui-pics" / "1A.png"),
+    str(_HERE / "gui-pics" / "2A.png"),
+)
 
 class Simulation():
     def __init__(self,
@@ -117,26 +121,6 @@ class Rocket():
         self.noseconeLength__mm + bodyTubeLength__mm + boattailLength__mm + 10.0  # Total length
 )
         
-class Component():
-    def __init__(self, name, dataframe):
-        self.name = name
-        self.dataframe = dataframe
-        
-        # TODO: Include reynolds in CD?
-        # TODO: Swap back to nearest
-        # Create interpolators
-        CDPOnInterpolator = LinearNDInterpolator(dataframe[["Mach", "Alpha"]].values, dataframe["CD Power-On"].values)
-        CDPOffInterpolator = LinearNDInterpolator(dataframe[["Mach", "Alpha"]].values, dataframe["CD Power-Off"].values)
-        CPInterpolator = LinearNDInterpolator(dataframe[["Mach", "Alpha", "Reynolds Number"]].values, dataframe["CP"].values)
-        CLInterpolator = LinearNDInterpolator(dataframe[["Mach", "Alpha", "Reynolds Number"]].values, dataframe["CL"].values)
-        CNAlphaInterpolator = LinearNDInterpolator(dataframe[["Mach", "Reynolds Number"]].values, dataframe["CNAlpha"].values)
-        
-        self.CDOn = CDPOnInterpolator
-        self.CDOff = CDPOffInterpolator
-        self.CP = CPInterpolator
-        self.CL = CLInterpolator
-        self.CNAlpha = CNAlphaInterpolator
-
 class RASAero():
     # Use of gui_automation in some instance driven by what appears to be a straight bug in the Windows" UIA framework.
     # When attempting to use the pywinauto on the child elements of the freshly popped-up "Aero Plots" window, the program was crashing with
@@ -429,192 +413,5 @@ class RASAero():
 
         return self.simulation
     
-    def parseAeroParameters(self):    
-        components = []
-        previousAssemblyDataframe = None
-        columns = ["Alpha", "Mach", "Reynolds Number", "CP", "CL", "CNalpha (0 to 4 deg) (per rad)", "CD Power-Off", "CD Power-On"]
-
-        # Parse the rocket definition unless already loaded
-        if self.rocket is None:
-            self.parseRocketDefinition()
-        
-        # Use this to split up the aeroplots file names later
-        basePath = Path(self.aeroPlotsFullPath)
-
-        for i, component in enumerate(reversed(self.aftComponentOrder)):
-            #files = list(basePath.parent.glob(f"{basePath.stem}-{component}*{basePath.suffix}"))
-            # Added a hyphen '-' before the wildcard '*' to prevent "Fin" matching "FinCan"
-            files = list(basePath.parent.glob(f"{basePath.stem}-{component}-*{basePath.suffix}"))
-            dataframes = [pd.read_csv(file).rename(columns=str.strip)[columns] for file in files]
-            assemblyDataframe = pd.concat(dataframes, ignore_index=True)
-
-            # TODO: Remove?
-            # Trim
-            assemblyDataframe = assemblyDataframe[assemblyDataframe["Mach"] <= 4]
-
-            # Normalize Reynolds number to use fully assembled rocket diameter instead of current assembly length
-            assemblyDataframe["Reynolds Number"] *= (self.rocket.runningLength__mm[-1] / self.rocket.runningLength__mm[i])
-
-            # Unit conversions
-            assemblyDataframe["CP"] *= 0.0254       # in to m
-            assemblyDataframe["Alpha"] *= 0.0174533 # deg to rad
-
-            # Renaming columns
-            assemblyDataframe = assemblyDataframe.rename(columns={"CNalpha (0 to 4 deg) (per rad)": "CNAlpha"})
-
-            # Make copy to preserve the assembly dataframe
-            componentDataframe = assemblyDataframe.copy()
-            
-            # For all the assemblies:
-            if previousAssemblyDataframe is not None:
-                # Component CL and CD calculation
-                componentDataframe[["CL", "CNAlpha", "CD Power-On", "CD Power-Off"]] -= previousAssemblyDataframe[["CL", "CNAlpha", "CD Power-On", "CD Power-Off"]].values
-
-                # Component CP calculation
-                componentDataframe["CP"] = ((assemblyDataframe["CP"] * assemblyDataframe["CNAlpha"]) - (previousAssemblyDataframe["CP"] * previousAssemblyDataframe["CNAlpha"])) / componentDataframe["CNAlpha"]
-            
-            # Record the component
-            component = Component(component, componentDataframe)
-            components.append(component)
-
-            # Generate the full rocket coefficients if this is the complete assembly
-            if (i + 1) >= len(self.aftComponentOrder):
-                self.rocket.component = Component("Rocket", assemblyDataframe)
-            
-            # Use this assembly as the previous for the next iteration
-            previousAssemblyDataframe = assemblyDataframe.copy()
-        
-        return self.rocket, components
-    
-    def parseRocketDefinition(self):
-        # Parse the XML file
-        tree = ET.parse(self.rocketDefinitionPath)
-        root = tree.getroot()
-        
-        # Find main sections
-        design = root.find("RocketDesign")
-        simulations = root.find("SimulationList")
-        simulation_elem = simulations.find("Simulation")
-        launchsite = root.find("LaunchSite")
-        
-        # Extract Simulation parameters
-        modifiedBarrowmanFlag = self.getElementText(design, "ModifiedBarrowman")
-        turbulenceFlag = self.getElementText(design, "Turbulence")
-        launchsiteElevation__m = self.ft2m(self.getElementText(launchsite, "Altitude"))
-        launchInclination__deg = 90 - float(self.getElementText(launchsite, "RodAngle"))
-        launchRailLength__m = self.ft2m(self.getElementText(launchsite, "RodLength"))
-        launchsiteTemperature__degC = self.degF2degC(self.getElementText(launchsite, "Temperature"))
-        windSpeed__m_s = self.mph2ms(self.getElementText(launchsite, "WindSpeed"))
-        
-        # Create Simulation instance
-        self.simulation = Simulation(
-            modifiedBarrowmanFlag=modifiedBarrowmanFlag,
-            turbulenceFlag=turbulenceFlag,
-            launchsiteElevation__m=launchsiteElevation__m,
-            launchInclination__deg=launchInclination__deg,
-            launchRailLength__m=launchRailLength__m,
-            launchsiteTemperature__degC=launchsiteTemperature__degC,
-            windSpeed__m_s=windSpeed__m_s
-        )
-        
-        # Extract Rocket parameters
-        surfaceFinish = self.getElementText(design, "Surface")
-        motor = self.getElementText(simulation_elem, "SustainerEngine")
-        loadedMass__kg = self.lbs2kg(self.getElementText(simulation_elem, "SustainerLaunchWt"))
-        nozzleDiameter__mm = self.in2mm(self.getElementText(simulation_elem, "SustainerNozzleDiameter"))
-        loadedCoM__m = self.in2m(self.getElementText(simulation_elem, "SustainerCG"))
-        
-        # Parse Nosecone
-        nosecone = design.find("NoseCone")
-        color = self.getElementText(nosecone, "Color")
-        noseconeShape = self.getElementText(nosecone, "Shape")
-        noseconeLength__mm = self.in2mm(self.getElementText(nosecone, "Length"))
-        bodyDiameter__mm = self.in2mm(self.getElementText(nosecone, "Diameter"))
-        noseconeTipRadius__mm = self.in2mm(self.getElementText(nosecone, "BluntRadius"))
-
-        # Parse Body Tube
-        bodyTube = design.find("BodyTube")
-        bodyTubeLength__mm = self.in2mm(self.getElementText(bodyTube, "Length"))
-
-        # Parse FinCan
-        fincan = design.find("FinCan")
-        fincanLength__mm = self.in2mm(self.getElementText(fincan, "Length"))
-        fincanDiameter__mm = self.in2mm(self.getElementText(fincan, "Diameter"))
-
-        # Parse Fins
-        fins = fincan.find("Fin")
-        finAirfoilSection = self.getElementText(fins, "AirfoilSection")
-        finCount = int(self.getElementText(fins, "Count"))
-        finRootChord__mm = self.in2mm(self.getElementText(fins, "Chord"))
-        finSpan__mm = self.in2mm(self.getElementText(fins, "Span"))
-        finSweepDistance__mm = self.in2mm(self.getElementText(fins, "SweepDistance"))
-        finTipChord__mm = self.in2mm(self.getElementText(fins, "TipChord"))
-        finThickness__mm = self.in2mm(self.getElementText(fins, "Thickness"))
-        finLeadingEdgeRadius__mm = self.in2mm(self.getElementText(fins, "LERadius"))
-        finLeadingEdgeLength__mm = self.in2mm(self.getElementText(fins, "FX1"))
-        finLocation__mm = self.in2mm(self.getElementText(fins, "Location"))
-        finAftOffset__mm = finLocation__mm - finRootChord__mm
-
-        # Parse Boattail
-        boattail = design.find("BoatTail")
-        boattailLength__mm = self.in2mm(self.getElementText(boattail, "Length"))
-        boattailAftDiameter__mm = self.in2mm(self.getElementText(boattail, "RearDiameter"))
-
-
-        '''# Parse Nosecone
-        nosecone = design.find("NoseCone")
-        color = self.getElementText(nosecone, "Color")
-        noseconeShape = self.getElementText(nosecone, "Shape")
-        noseconeLength__mm = self.in2mm(self.getElementText(nosecone, "Length"))
-        bodyDiameter__mm = self.in2mm(self.getElementText(nosecone, "Diameter"))
-        noseconeTipRadius__mm = self.in2mm(self.getElementText(nosecone, "BluntRadius"))
-        
-        # Parse Body Tube
-        bodyTube = design.find("BodyTube")
-        bodyTubeLength__mm = self.in2mm(self.getElementText(bodyTube, "Length"))
-        
-        # Parse Boattail
-        boattail = design.find("BoatTail")
-        boattailLength__mm = self.in2mm(self.getElementText(boattail, "Length"))
-        boattailAftDiameter__mm = self.in2mm(self.getElementText(boattail, "RearDiameter"))
-            
-        # Parse Fins (nested under boattail)
-        fins = boattail.find("Fin")
-        finAirfoilSection = self.getElementText(fins, "AirfoilSection")
-        finCount = int(self.getElementText(fins, "Count"))
-        finRootChord__mm = self.in2mm(self.getElementText(fins, "Chord"))
-        finSpan__mm = self.in2mm(self.getElementText(fins, "Span"))
-        finSweepDistance__mm = self.in2mm(self.getElementText(fins, "SweepDistance"))
-        finTipChord__mm = self.in2mm(self.getElementText(fins, "TipChord"))
-        finThickness__mm = self.in2mm(self.getElementText(fins, "Thickness"))
-        finLeadingEdgeRadius__mm = self.in2mm(self.getElementText(fins, "LERadius"))
-        finLeadingEdgeLength__mm = self.in2mm(self.getElementText(fins, "FX1"))
-        finLocation__mm = self.in2mm(self.getElementText(fins, "Location"))
-        finAftOffset__mm = finLocation__mm - finRootChord__mm'''
-        
-        # Create Rocket instance
-        self.rocket = Rocket(
-            surfaceFinish=surfaceFinish,
-            motor=motor,
-            loadedMass__kg=loadedMass__kg,
-            nozzleDiameter__mm=nozzleDiameter__mm,
-            loadedCoM__m=loadedCoM__m,
-            noseconeShape=noseconeShape,
-            noseconeLength__mm=noseconeLength__mm,
-            bodyDiameter__mm=bodyDiameter__mm,
-            noseconeTipRadius__mm=noseconeTipRadius__mm,
-            bodyTubeLength__mm=bodyTubeLength__mm,
-            boattailLength__mm=boattailLength__mm,
-            boattailAftDiameter__mm=boattailAftDiameter__mm,
-            finRootChord__mm=finRootChord__mm,
-            finAftOffset__mm=finAftOffset__mm,
-            finAirfoilSection=finAirfoilSection,
-            finCount=finCount,
-            finSpan__mm=finSpan__mm,
-            finSweepDistance__mm=finSweepDistance__mm,
-            finTipChord__mm=finTipChord__mm,
-            finThickness__mm=finThickness__mm,
-            finLeadingEdgeRadius__mm=finLeadingEdgeRadius__mm,
-            finLeadingEdgeLength__mm=finLeadingEdgeLength__mm,
-            color=color
-        )
+    # parseAeroParameters and parseRocketDefinition removed —
+    # YAML is now the source of truth; conversion is handled by convert.py.
