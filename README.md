@@ -126,6 +126,14 @@ One CSV per aerodynamic component, written to the LFS `aero_tables/` directory.
 These files are consumed directly by LFS. After running `pyrasaero-convert`, copy or link the `aero_tables/` directory to the relevant LFS simulation directory and update the `aero_tables` path in `vehicle.yaml`.
 
 
+## Related Tools
+
+| Tool | Purpose |
+|------|---------|
+| [leeds-flight-simulator](https://github.com/leedsrocketry/leeds-flight-simulator) | 6DoF Monte Carlo flight simulator that consumes the aero tables pyrasaero produces |
+| [windgen](https://github.com/leedsrocketry/windgen) | Generates the wind profile ensembles for LFS |
+
+
 ## Contact
 
 - **Toby Thomson** — el21tbt@leeds.ac.uk, me@tobythomson.co.uk
