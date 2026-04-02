@@ -18,7 +18,7 @@ Built for the Gryphon II Block II (G2B2) campaign by the Leeds University Rocket
 **Prerequisites:** Python 3.10+, Windows, RASAero II installed.
 
 ```
-pip install click pyyaml numpy pandas scipy pywinauto keyboard opencv-python Pillow
+pip install click pyyaml numpy pandas scipy pywinauto keyboard Pillow
 ```
 
 
@@ -68,11 +68,6 @@ The shared vehicle YAML (e.g. `g2b2-o3400.yaml`). pyrasaero reads:
 - `components` -- nested component geometry (nosecone, body_tube, boattail, fins), ordered forward-to-aft
 - `mass` -- wet mass and CG
 - `rasaero` -- surface finish, colour, RASAero motor name
-
-### GUI Reference Screenshots
-
-`gui-pics/` contains reference screenshots used by the OpenCV-based GUI automation to locate UI elements in RASAero II. These must match the installed version of RASAero II.
-
 
 ## Output Files
 

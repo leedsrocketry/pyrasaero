@@ -1,28 +1,16 @@
 import sys
 import pandas as pd
 import xml.etree.ElementTree as ET
-import cv2
 import keyboard
 import shutil
-from pathlib import Path
 from PIL import Image
 from time import sleep
-try:
-    from gui_automation import GuiAuto
-except ImportError:
-    GuiAuto = None  # gui_automation not available
 from pywinauto.application import Application
 from pywinauto import Desktop
 import numpy as np
 import os
 
 RASAeroPath = "C:\\Program Files (x86)\\RASAero II\\RASAero II.exe"
-_HERE = Path(__file__).resolve().parent
-RASAeroGUIImages = (
-    str(_HERE / "gui-pics" / "0A.png"),
-    str(_HERE / "gui-pics" / "1A.png"),
-    str(_HERE / "gui-pics" / "2A.png"),
-)
 
 class Simulation():
     def __init__(self,
@@ -106,11 +94,11 @@ class Rocket():
         self.mainParachuteAltitude__m = mainParachuteAltitude__m
         self.color = color
 
-        if finThickness__mm is None:
-            finThickness__mm=(self.finRootThickness__mm + self.finTipThickness__mm) / 2.0
-        
-        if finLeadingEdgeLength__mm is None:
-            finLeadingEdgeLength__mm=(self.finRootChord__mm + self.finTipChord__mm) / 4.0
+        if self.finThickness__mm is None:
+            self.finThickness__mm = (self.finRootThickness__mm + self.finTipThickness__mm) / 2.0
+
+        if self.finLeadingEdgeLength__mm is None:
+            self.finLeadingEdgeLength__mm = (self.finRootChord__mm + self.finTipChord__mm) / 4.0
         
         # Adjusted to 5 values to match your 5 components in aftComponentOrder
         self.runningLength__mm = (
@@ -122,10 +110,6 @@ class Rocket():
 )
         
 class RASAero():
-    # Use of gui_automation in some instance driven by what appears to be a straight bug in the Windows" UIA framework.
-    # When attempting to use the pywinauto on the child elements of the freshly popped-up "Aero Plots" window, the program was crashing with
-    # behaviour very similar to that found here: https://github.com/pywinauto/pywinauto/issues/563
-    guiAuto = GuiAuto()
     window = None
     rocket = None
     simulation = None
@@ -293,18 +277,13 @@ class RASAero():
                 # Give the "Aero Plots" window time to open before we look for buttons
                 sleep(self.guiLongDelay__s)
                 
-                # Looking for "File" --> "Export" --> "To CSV File"
-                for filename in RASAeroGUIImages:
-                    sleep(self.guiShortDelay__s)
-                    
-                    spot = self.guiAuto.detect(cv2.imread(filename), 0.95)
-                    if spot:
-                        x, y = spot.custom_position(1, 12, 1, 6)
-                        self.guiAuto.click(coords=(x, y), clicks=1)
-                    
-                    else:
-                        print("UNABLE TO FIND ONE OF THE BUTTONS REQUIRED FOR CSV EXPORT")
-                        exit()
+                # Navigate File → Export → To CSV File via keyboard
+                # (avoids resolution-dependent image matching)
+                keyboard.send("alt+f")
+                sleep(self.guiShortDelay__s)
+                keyboard.send("e")
+                sleep(self.guiShortDelay__s)
+                keyboard.send("t")
                 
                 # Export the "Aero Plots" data
                 base, extension = os.path.splitext(self.aeroPlotsFullPath)
@@ -335,8 +314,8 @@ class RASAero():
         launchsite = ET.SubElement(root, "LaunchSite")
 
         # Simulation Setup
-        self.addElement(design, "ModifiedBarrowman", self.simulation.modifiedBarrowmanFlag)
-        self.addElement(design, "Turbulence", self.simulation.turbulenceFlag)
+        self.addElement(design, "ModifiedBarrowman", self.simulation.rASAeroModifiedBarrowmanFlag)
+        self.addElement(design, "Turbulence", self.simulation.rASAeroTurbulenceFlag)
         self.addElement(launchsite, "Altitude", self.m2ft(self.simulation.launchsiteElevation__m))
         self.addElement(launchsite, "RodAngle", (90 - self.simulation.launchInclination__deg))
         self.addElement(launchsite, "RodLength", self.m2ft(self.simulation.launchRailLength__m))
@@ -348,7 +327,7 @@ class RASAero():
         self.addElement(simulation, "SustainerEngine", self.rocket.motor)
         self.addElement(simulation, "SustainerLaunchWt", self.kg2lbs(self.rocket.loadedMass__kg))
         self.addElement(simulation, "SustainerNozzleDiameter", self.mm2in(self.rocket.nozzleDiameter__mm))
-        self.addElement(simulation, "SustainerCG", self.m2in(self.rocket.loadedCoM__m))
+        self.addElement(simulation, "SustainerCG", self.mm2in(self.rocket.loadedCoM__m * 1000))
 
         # Nosecone
         nosecone = ET.SubElement(design, "NoseCone")
