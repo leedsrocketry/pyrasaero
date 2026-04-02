@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "pyrasaero"
+version = "0.1.0"
+description = "RASAero II automation, CDX1 read/write, and aeroplot conversion"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "pywinauto",
+    "keyboard",
+    "opencv-python",
+    "Pillow",
+    "matplotlib",
+    "rocketpy",
+    "colored",
+    "texttable",
+    "ambiance",
+]
+
+[project.scripts]
+pyrasaero = "pyrasaero.cli:main"
+pyrasaero-convert = "pyrasaero.convert:main"
