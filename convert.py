@@ -164,6 +164,7 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
         vehicle_re = statistics.median(vehicle_re_values)
 
         # Difference fore to aft
+        vehicle_len_in = vehicle_len_mm / 25.4
         prev_rows: list[list[float]] | None = None
         for comp in fore_to_aft:
             asm = asm_data[comp]
@@ -182,6 +183,13 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
                         cp = (a[I_CP] * a[I_CNA] - p[I_CP] * p[I_CNA]) / cna
                     else:
                         cp = a[I_CP]
+
+                    # Clamp CP to vehicle length.  When CNα is small the
+                    # moment-balance can produce values far outside the
+                    # airframe; the resulting moment is negligible anyway,
+                    # so a bounded value is safe and avoids polluting the
+                    # interpolation grid.
+                    cp = max(0.0, min(cp, vehicle_len_in))
 
                     comp_output[comp].append([
                         a[I_MACH], vehicle_re, a[I_AOA],
