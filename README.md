@@ -67,6 +67,7 @@ The shared vehicle YAML (e.g. `g2b2-o3400.yaml`). pyrasaero reads:
 - `body_diameter_mm`, `nozzle_diameter_mm` -- top-level vehicle dimensions
 - `components` -- nested component geometry (nosecone, body_tube, boattail, fins), ordered forward-to-aft
 - `mass` -- wet mass and CG
+- `recovery` -- drogue and main parachute CD, diameter, and deploy threshold (used for CDX1 Recovery section)
 - `rasaero` -- surface finish, colour, RASAero motor name
 
 ## Output Files

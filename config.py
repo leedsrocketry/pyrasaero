@@ -53,6 +53,20 @@ class VehicleMass:
 
 
 @dataclass(frozen=True)
+class RecoveryDevice:
+    """A single recovery device (drogue or main)."""
+    cd: float
+    diameter_mm: float
+    threshold: str | float  # "apogee" or altitude in metres
+
+@dataclass(frozen=True)
+class VehicleRecovery:
+    """Recovery configuration from the vehicle YAML."""
+    drogue: RecoveryDevice | None
+    main: RecoveryDevice | None
+
+
+@dataclass(frozen=True)
 class RasaeroVehicle:
     """RASAero vehicle properties from the vehicle YAML."""
 
@@ -80,6 +94,7 @@ class PyrasaeroConfig:
 
     components: VehicleComponents
     mass: VehicleMass
+    recovery: VehicleRecovery
     rasaero_vehicle: RasaeroVehicle
     rasaero_sim: RasaeroSimulation
     vehicle_yaml_dir: Path
@@ -151,6 +166,26 @@ def load_config(simulation_yaml_path: Path) -> PyrasaeroConfig:
         wet_cg_mm=float(mass_raw["wet_cg_mm"]),
     )
 
+    # --- Recovery ---
+    rec_raw = veh_raw.get("recovery", {})
+    drogue = None
+    main = None
+    if "drogue" in rec_raw:
+        d = rec_raw["drogue"]
+        drogue = RecoveryDevice(
+            cd=float(d["cd"]),
+            diameter_mm=float(d["diameter_mm"]),
+            threshold=d["threshold"],
+        )
+    if "main" in rec_raw:
+        m = rec_raw["main"]
+        main = RecoveryDevice(
+            cd=float(m["cd"]),
+            diameter_mm=float(m["diameter_mm"]),
+            threshold=m["threshold"],
+        )
+    recovery = VehicleRecovery(drogue=drogue, main=main)
+
     # --- RASAero vehicle properties ---
     ra_veh = veh_raw["rasaero"]
     rasaero_vehicle = RasaeroVehicle(
@@ -186,6 +221,7 @@ def load_config(simulation_yaml_path: Path) -> PyrasaeroConfig:
     return PyrasaeroConfig(
         components=components,
         mass=mass,
+        recovery=recovery,
         rasaero_vehicle=rasaero_vehicle,
         rasaero_sim=rasaero_sim,
         vehicle_yaml_dir=vehicle_dir,

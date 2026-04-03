@@ -57,8 +57,10 @@ class Rocket():
                  loadedMoI__kgm2=None,
                  drogueCD=None,
                  drogueArea__m2=None,
+                 drogueDiameter__mm=None,
                  mainCD=None,
                  mainArea__m2=None,
+                 mainDiameter__mm=None,
                  mainParachuteAltitude__m=None,
                  color="Black"
     ):
@@ -89,8 +91,10 @@ class Rocket():
         self.loadedMoI__kgm2 = loadedMoI__kgm2
         self.drogueCD = drogueCD
         self.drogueArea__m2 = drogueArea__m2
+        self.drogueDiameter__mm = drogueDiameter__mm
         self.mainCD = mainCD
         self.mainArea__m2 = mainArea__m2
+        self.mainDiameter__mm = mainDiameter__mm
         self.mainParachuteAltitude__m = mainParachuteAltitude__m
         self.color = color
 
@@ -100,23 +104,33 @@ class Rocket():
         if self.finLeadingEdgeLength__mm is None:
             self.finLeadingEdgeLength__mm = (self.finRootChord__mm + self.finTipChord__mm) / 4.0
         
-        # Adjusted to 5 values to match your 5 components in aftComponentOrder
+        # Component start positions from nose tip [mm].
+        # Index 0 = body tube start, 1 = boattail start, 2 = vehicle aft end.
         self.runningLength__mm = (
-        self.noseconeLength__mm,
-        self.noseconeLength__mm + bodyTubeLength__mm,
-        self.noseconeLength__mm + bodyTubeLength__mm + boattailLength__mm,
-        self.noseconeLength__mm + bodyTubeLength__mm + boattailLength__mm + 10.0, # Placeholder for FinCan
-        self.noseconeLength__mm + bodyTubeLength__mm + boattailLength__mm + 10.0  # Total length
-)
+            self.noseconeLength__mm,
+            self.noseconeLength__mm + bodyTubeLength__mm,
+            self.noseconeLength__mm + bodyTubeLength__mm + boattailLength__mm,
+        )
         
 class RASAero():
     window = None
     rocket = None
     simulation = None
-    #aftComponentOrder = ("Fin", "BoatTail", "BodyTube", "NoseCone")
-    aftComponentOrder = ("BoatTail", "Fin", "FinCan", "BodyTube", "NoseCone")
+    # Aft-to-fore: each entry is exported (as a cumulative assembly), then
+    # stripped from the working CDX1 before the next.  The aftmost component
+    # in each assembly gives its name to the exported CSV.
+    aftComponentOrder = ("Fin", "BoatTail", "BodyTube", "NoseCone")
     guiShortDelay__s = 0.5
     guiLongDelay__s = 2.0
+
+    @staticmethod
+    def killAll():
+        """Kill all running RASAero II processes."""
+        import subprocess
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "RASAero II.exe"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
 
     def __init__(self, rocketDefinitionPath, rocketIllustrationFullPath, flightSimulationFullPath, aeroPlotsFullPath):
         self.rocketDefinitionPath = rocketDefinitionPath
@@ -124,11 +138,20 @@ class RASAero():
         self.flightSimulationFullPath = flightSimulationFullPath
         self.aeroPlotsFullPath = aeroPlotsFullPath
     
-    def mm2in(self, mm): return mm / 25.4
-    def m2ft(self, m): return m * 3.28084
-    def kg2lbs(self, kg): return kg * 2.20462
-    def ms2mph(self, ms): return ms * 2.23694
-    def degC2degF(self, degC): return (degC * (9 / 5)) + 32
+    @staticmethod
+    def _rnd(value: float, ndigits: int = 5) -> float:
+        """Round to *ndigits* significant figures."""
+        if value == 0:
+            return 0
+        from math import log10, floor
+        magnitude = floor(log10(abs(value)))
+        return round(value, ndigits - 1 - magnitude)
+
+    def mm2in(self, mm): return self._rnd(mm / 25.4)
+    def m2ft(self, m): return self._rnd(m * 3.28084)
+    def kg2lbs(self, kg): return self._rnd(kg * 2.20462)
+    def ms2mph(self, ms): return self._rnd(ms * 2.23694)
+    def degC2degF(self, degC): return self._rnd((degC * (9 / 5)) + 32)
     def ft2m(self, value): return float(value) * 0.3048 
     def degF2degC(self, value): return (float(value) - 32) * 5/9 
     def mph2ms(self, value): return float(value) * 0.44704 
@@ -147,8 +170,6 @@ class RASAero():
                 if attempt == attempts - 1:
                     print("MAXIMUM RASAERO ATTEMPTS REACHED. EXITING.")
                     sys.exit(1)
-                
-                #sleep(self.guiLongDelay__s)
     
     def getElementText(self, parent, tag):
         element = parent.find(tag)
@@ -241,6 +262,13 @@ class RASAero():
         return None
     
     def exportAeroPlots(self, altitudes):
+        # Delete any existing aeroplot CSVs to avoid overwrite pop-ups
+        aero_dir = os.path.dirname(self.aeroPlotsFullPath)
+        if os.path.isdir(aero_dir):
+            for f in os.listdir(aero_dir):
+                if f.lower().startswith("aeroplots") and f.lower().endswith(".csv"):
+                    os.remove(os.path.join(aero_dir, f))
+
         # Make a working copy of the rocket definition
         base, extension = os.path.splitext(self.rocketDefinitionPath)
         workingPath = f"{base}-working{extension}"
@@ -287,7 +315,7 @@ class RASAero():
                 
                 # Export the "Aero Plots" data
                 base, extension = os.path.splitext(self.aeroPlotsFullPath)
-                keyboard.write(f"{base}-{component}-{altitude:.0f}{extension}")
+                keyboard.write(f"{base}-{component.lower()}-{altitude:.0f}{extension}")
                 keyboard.send("enter")
                 
                 # Close "Aero Plots" window
@@ -305,71 +333,102 @@ class RASAero():
     def exportRocketDefinition(self, rocket, simulation):
         self.rocket = rocket
         self.simulation = simulation
-        
-        # Document Setup
-        root = ET.Element("RASAeroDocument")
-        design = ET.SubElement(root, "RocketDesign")
-        simulations = ET.SubElement(root, "SimulationList")
-        simulation = ET.SubElement(simulations, "Simulation")
-        launchsite = ET.SubElement(root, "LaunchSite")
 
-        # Simulation Setup
+        # --- Document structure (order matches RASAero's own output) ---
+        root = ET.Element("RASAeroDocument")
+        self.addElement(root, "FileVersion", 2)
+
+        design = ET.SubElement(root, "RocketDesign")
+
+        # --- Components ---
+        # NoseCone
+        nosecone = ET.SubElement(design, "NoseCone")
+        self.addElement(nosecone, "PartType", "NoseCone")
+        self.addElement(nosecone, "Length", self.mm2in(rocket.noseconeLength__mm))
+        self.addElement(nosecone, "Diameter", self.mm2in(rocket.bodyDiameter__mm))
+        self.addElement(nosecone, "Shape", rocket.noseconeShape)
+        self.addElement(nosecone, "BluntRadius", self.mm2in(rocket.noseconeTipRadius__mm))
+        self.addElement(nosecone, "Location", 0)
+        self.addElement(nosecone, "Color", rocket.color)
+
+        # BodyTube
+        body_tube = ET.SubElement(design, "BodyTube")
+        self.addElement(body_tube, "PartType", "BodyTube")
+        self.addElement(body_tube, "Length", self.mm2in(rocket.bodyTubeLength__mm))
+        self.addElement(body_tube, "Diameter", self.mm2in(rocket.bodyDiameter__mm))
+        self.addElement(body_tube, "Location", self.mm2in(rocket.runningLength__mm[0]))
+        self.addElement(body_tube, "Color", rocket.color)
+
+        # BoatTail
+        boattail = ET.SubElement(design, "BoatTail")
+        self.addElement(boattail, "PartType", "BoatTail")
+        self.addElement(boattail, "Length", self.mm2in(rocket.boattailLength__mm))
+        self.addElement(boattail, "Diameter", self.mm2in(rocket.bodyDiameter__mm))
+        self.addElement(boattail, "RearDiameter", self.mm2in(rocket.boattailAftDiameter__mm))
+        self.addElement(boattail, "Location", self.mm2in(rocket.runningLength__mm[1]))
+        self.addElement(boattail, "Color", rocket.color)
+
+        # Fin (nested inside BoatTail)
+        fins = ET.SubElement(boattail, "Fin")
+        self.addElement(fins, "Count", rocket.finCount)
+        self.addElement(fins, "Chord", self.mm2in(rocket.finRootChord__mm))
+        self.addElement(fins, "Span", self.mm2in(rocket.finSpan__mm))
+        self.addElement(fins, "SweepDistance", self.mm2in(rocket.finSweepDistance__mm))
+        self.addElement(fins, "TipChord", self.mm2in(rocket.finTipChord__mm))
+        self.addElement(fins, "Thickness", self.mm2in(rocket.finThickness__mm))
+        self.addElement(fins, "LERadius", self.mm2in(rocket.finLeadingEdgeRadius__mm))
+        self.addElement(fins, "Location", self.mm2in(rocket.finRootChord__mm + rocket.finAftOffset__mm))
+        self.addElement(fins, "AirfoilSection", rocket.finAirfoilSection)
+        self.addElement(fins, "FX1", self.mm2in(rocket.finLeadingEdgeLength__mm))
+        self.addElement(fins, "FX3", 0)
+
+        # Design-level fields
+        self.addElement(design, "Surface", rocket.surfaceFinish)
         self.addElement(design, "ModifiedBarrowman", self.simulation.rASAeroModifiedBarrowmanFlag)
         self.addElement(design, "Turbulence", self.simulation.rASAeroTurbulenceFlag)
+
+        # --- LaunchSite ---
+        launchsite = ET.SubElement(root, "LaunchSite")
         self.addElement(launchsite, "Altitude", self.m2ft(self.simulation.launchsiteElevation__m))
-        self.addElement(launchsite, "RodAngle", (90 - self.simulation.launchInclination__deg))
+        self.addElement(launchsite, "Pressure", 29.53)
+        self.addElement(launchsite, "RodAngle", self._rnd(90 - self.simulation.launchInclination__deg))
         self.addElement(launchsite, "RodLength", self.m2ft(self.simulation.launchRailLength__m))
         self.addElement(launchsite, "Temperature", self.degC2degF(self.simulation.launchsiteTemperature__degC))
         self.addElement(launchsite, "WindSpeed", self.ms2mph(self.simulation.windSpeed__m_s))
-        
-        # Rocket
-        self.addElement(design, "Surface", self.rocket.surfaceFinish)
-        self.addElement(simulation, "SustainerEngine", self.rocket.motor)
-        self.addElement(simulation, "SustainerLaunchWt", self.kg2lbs(self.rocket.loadedMass__kg))
-        self.addElement(simulation, "SustainerNozzleDiameter", self.mm2in(self.rocket.nozzleDiameter__mm))
-        self.addElement(simulation, "SustainerCG", self.mm2in(self.rocket.loadedCoM__m * 1000))
 
-        # Nosecone
-        nosecone = ET.SubElement(design, "NoseCone")
-        self.addElement(nosecone, "PartType", "NoseCone")
-        self.addElement(nosecone, "Location", self.mm2in(rocket.runningLength__mm[0]))
-        self.addElement(nosecone, "Color", self.rocket.color)
-        self.addElement(nosecone, "Shape", self.rocket.noseconeShape)
-        self.addElement(nosecone, "Length", self.mm2in(self.rocket.noseconeLength__mm))
-        self.addElement(nosecone, "Diameter", self.mm2in(self.rocket.bodyDiameter__mm))
-        self.addElement(nosecone, "BluntRadius", self.mm2in(self.rocket.noseconeTipRadius__mm))
-        
-        # Body Tube
-        bodyTube = ET.SubElement(design, "BodyTube")
-        self.addElement(bodyTube, "PartType", "BodyTube")
-        self.addElement(bodyTube, "Location", self.mm2in(rocket.runningLength__mm[1]))
-        self.addElement(bodyTube, "Color", rocket.color)
-        self.addElement(bodyTube, "Length", self.mm2in(self.rocket.bodyTubeLength__mm))
-        self.addElement(bodyTube, "Diameter", self.mm2in(self.rocket.bodyDiameter__mm))
-        
-        # Boattail
-        boattail = ET.SubElement(design, "BoatTail")
-        self.addElement(boattail, "PartType", "BoatTail")
-        self.addElement(boattail, "Location", self.mm2in(rocket.runningLength__mm[2]))
-        self.addElement(boattail, "Color", self.rocket.color)
-        self.addElement(boattail, "Length", self.mm2in(self.rocket.boattailLength__mm))
-        self.addElement(boattail, "Diameter", self.mm2in(self.rocket.bodyDiameter__mm))
-        self.addElement(boattail, "RearDiameter", self.mm2in(self.rocket.boattailAftDiameter__mm))
-        
-        # Fins
-        fins = ET.SubElement(boattail, "Fin")
-        self.addElement(fins, "Location", self.mm2in(self.rocket.finRootChord__mm + self.rocket.finAftOffset__mm))
-        self.addElement(fins, "Color", self.rocket.color)
-        self.addElement(fins, "AirfoilSection", self.rocket.finAirfoilSection)
-        self.addElement(fins, "Count", self.rocket.finCount)
-        self.addElement(fins, "Chord", self.mm2in(self.rocket.finRootChord__mm))
-        self.addElement(fins, "Span", self.mm2in(self.rocket.finSpan__mm))
-        self.addElement(fins, "SweepDistance", self.mm2in(self.rocket.finSweepDistance__mm))
-        self.addElement(fins, "TipChord", self.mm2in(self.rocket.finTipChord__mm))
-        self.addElement(fins, "Thickness", self.mm2in(self.rocket.finThickness__mm))
-        self.addElement(fins, "LERadius", self.mm2in(self.rocket.finLeadingEdgeRadius__mm))
-        self.addElement(fins, "FX1", self.mm2in(self.rocket.finLeadingEdgeLength__mm))
-        
+        # --- Recovery ---
+        if rocket.drogueCD is not None or rocket.mainCD is not None:
+            recovery = ET.SubElement(root, "Recovery")
+            has_drogue = rocket.drogueCD is not None
+            has_main = rocket.mainCD is not None
+
+            # Drogue (device 1)
+            self.addElement(recovery, "Altitude1", 1000)
+            self.addElement(recovery, "DeviceType1", "Parachute")
+            self.addElement(recovery, "Event1", has_drogue)
+            self.addElement(recovery, "Size1",
+                            self.mm2in(rocket.drogueDiameter__mm) if has_drogue else 0)
+            self.addElement(recovery, "EventType1", "Apogee")
+            self.addElement(recovery, "CD1", rocket.drogueCD if has_drogue else 0)
+
+            # Main (device 2)
+            main_alt_ft = self._rnd(self.m2ft(rocket.mainParachuteAltitude__m)) if has_main else 1000
+            self.addElement(recovery, "Altitude2", main_alt_ft)
+            self.addElement(recovery, "DeviceType2", "Parachute")
+            self.addElement(recovery, "Event2", has_main)
+            self.addElement(recovery, "Size2",
+                            self.mm2in(rocket.mainDiameter__mm) if has_main else 0)
+            self.addElement(recovery, "EventType2", "Altitude")
+            self.addElement(recovery, "CD2", rocket.mainCD if has_main else 0)
+
+        # --- Simulation ---
+        sim_list = ET.SubElement(root, "SimulationList")
+        sim_el = ET.SubElement(sim_list, "Simulation")
+        self.addElement(sim_el, "SustainerEngine", rocket.motor)
+        self.addElement(sim_el, "SustainerLaunchWt", self.kg2lbs(rocket.loadedMass__kg))
+        self.addElement(sim_el, "SustainerNozzleDiameter", self.mm2in(rocket.nozzleDiameter__mm))
+        self.addElement(sim_el, "SustainerCG", self.mm2in(rocket.loadedCoM__m * 1000))
+
         self.writeCDX1File(root, self.rocketDefinitionPath)
     
     def parseFlightSimulation(self):

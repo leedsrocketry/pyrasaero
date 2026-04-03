@@ -6,7 +6,53 @@ from pathlib import Path
 
 import click
 
-from config import load_config
+from config import load_config, PyrasaeroConfig
+
+
+def _build_rocket(cfg: PyrasaeroConfig):
+    """Construct a Rocket from a PyrasaeroConfig."""
+    from automation import Rocket
+
+    rec = cfg.recovery
+    drogue_cd = rec.drogue.cd if rec.drogue else None
+    drogue_dia = rec.drogue.diameter_mm if rec.drogue else None
+    main_cd = rec.main.cd if rec.main else None
+    main_dia = rec.main.diameter_mm if rec.main else None
+    main_alt = (
+        float(rec.main.threshold)
+        if rec.main and isinstance(rec.main.threshold, (int, float))
+        else None
+    )
+
+    return Rocket(
+        surfaceFinish=cfg.rasaero_vehicle.surface_finish,
+        motor=cfg.rasaero_vehicle.motor,
+        loadedMass__kg=cfg.mass.wet_mass_kg,
+        nozzleDiameter__mm=cfg.components.nozzle_diameter_mm,
+        loadedCoM__m=cfg.mass.wet_cg_mm / 1000,
+        noseconeShape=cfg.components.nosecone_shape,
+        noseconeLength__mm=cfg.components.nosecone_length_mm,
+        bodyDiameter__mm=cfg.components.body_diameter_mm,
+        noseconeTipRadius__mm=cfg.components.nosecone_tip_radius_mm,
+        bodyTubeLength__mm=cfg.components.body_tube_length_mm,
+        boattailLength__mm=cfg.components.boattail_length_mm,
+        boattailAftDiameter__mm=cfg.components.boattail_aft_diameter_mm,
+        finRootChord__mm=cfg.components.fin_root_chord_mm,
+        finAftOffset__mm=cfg.components.fin_aft_offset_mm,
+        finAirfoilSection=cfg.components.fin_airfoil_section,
+        finCount=cfg.components.fin_count,
+        finSpan__mm=cfg.components.fin_span_mm,
+        finSweepDistance__mm=cfg.components.fin_sweep_distance_mm,
+        finTipChord__mm=cfg.components.fin_tip_chord_mm,
+        finLeadingEdgeRadius__mm=cfg.components.fin_leading_edge_radius_mm,
+        finThickness__mm=cfg.components.fin_thickness_mm,
+        color=cfg.rasaero_vehicle.color,
+        drogueCD=drogue_cd,
+        drogueDiameter__mm=drogue_dia,
+        mainCD=main_cd,
+        mainDiameter__mm=main_dia,
+        mainParachuteAltitude__m=main_alt,
+    )
 
 
 @click.group()
@@ -35,32 +81,9 @@ def run(
     cfg = load_config(simulation_yaml)
 
     if not convert_only:
-        from automation import Rocket, Simulation, RASAero
+        from automation import Simulation, RASAero
 
-        rocket = Rocket(
-            surfaceFinish=cfg.rasaero_vehicle.surface_finish,
-            motor=cfg.rasaero_vehicle.motor,
-            loadedMass__kg=cfg.mass.wet_mass_kg,
-            nozzleDiameter__mm=cfg.components.nozzle_diameter_mm,
-            loadedCoM__m=cfg.mass.wet_cg_mm / 1000,
-            noseconeShape=cfg.components.nosecone_shape,
-            noseconeLength__mm=cfg.components.nosecone_length_mm,
-            bodyDiameter__mm=cfg.components.body_diameter_mm,
-            noseconeTipRadius__mm=cfg.components.nosecone_tip_radius_mm,
-            bodyTubeLength__mm=cfg.components.body_tube_length_mm,
-            boattailLength__mm=cfg.components.boattail_length_mm,
-            boattailAftDiameter__mm=cfg.components.boattail_aft_diameter_mm,
-            finRootChord__mm=cfg.components.fin_root_chord_mm,
-            finAftOffset__mm=cfg.components.fin_aft_offset_mm,
-            finAirfoilSection=cfg.components.fin_airfoil_section,
-            finCount=cfg.components.fin_count,
-            finSpan__mm=cfg.components.fin_span_mm,
-            finSweepDistance__mm=cfg.components.fin_sweep_distance_mm,
-            finTipChord__mm=cfg.components.fin_tip_chord_mm,
-            finLeadingEdgeRadius__mm=cfg.components.fin_leading_edge_radius_mm,
-            finThickness__mm=cfg.components.fin_thickness_mm,
-            color=cfg.rasaero_vehicle.color,
-        )
+        rocket = _build_rocket(cfg)
 
         simulation = Simulation(
             modifiedBarrowmanFlag=cfg.rasaero_sim.modified_barrowman,
@@ -80,12 +103,19 @@ def run(
         flight_sim_path = str(rasaero_data_dir / "flight-simulation.csv")
 
         ra = RASAero(cdx1_path, flight_sim_path, flight_sim_path, aeroplots_path)
-        ra.exportRocketDefinition(rocket, simulation)
-        click.echo(f"CDX1 written to {cfg.cdx1_path}")
+        try:
+            ra.exportRocketDefinition(rocket, simulation)
+            click.echo(f"CDX1 written to {cfg.cdx1_path}")
 
-        altitudes = list(range(0, int(max_altitude) + 1, int(altitude_step)))
-        ra.exportAeroPlots(altitudes)
-        click.echo(f"Aeroplots exported to {rasaero_data_dir}")
+            altitudes = list(range(0, int(max_altitude) + 1, int(altitude_step)))
+            ra.exportAeroPlots(altitudes)
+            click.echo(f"Aeroplots exported to {rasaero_data_dir}")
+        except (Exception, KeyboardInterrupt):
+            click.echo("\nClosing RASAero II...")
+            RASAero.killAll()
+            raise
+        finally:
+            RASAero.killAll()
 
     # --- Conversion ---
     from convert import convert
@@ -99,32 +129,9 @@ def write_cdx1(simulation_yaml: Path) -> None:
     """Generate a CDX1 file from the vehicle and simulation config."""
     cfg = load_config(simulation_yaml)
 
-    from automation import Rocket, Simulation, RASAero
+    from automation import Simulation, RASAero
 
-    rocket = Rocket(
-        surfaceFinish=cfg.rasaero_vehicle.surface_finish,
-        motor=cfg.rasaero_vehicle.motor,
-        loadedMass__kg=cfg.mass.wet_mass_kg,
-        nozzleDiameter__mm=cfg.components.nozzle_diameter_mm,
-        loadedCoM__m=cfg.mass.wet_cg_mm / 1000,
-        noseconeShape=cfg.components.nosecone_shape,
-        noseconeLength__mm=cfg.components.nosecone_length_mm,
-        bodyDiameter__mm=cfg.components.body_diameter_mm,
-        noseconeTipRadius__mm=cfg.components.nosecone_tip_radius_mm,
-        bodyTubeLength__mm=cfg.components.body_tube_length_mm,
-        boattailLength__mm=cfg.components.boattail_length_mm,
-        boattailAftDiameter__mm=cfg.components.boattail_aft_diameter_mm,
-        finRootChord__mm=cfg.components.fin_root_chord_mm,
-        finAftOffset__mm=cfg.components.fin_aft_offset_mm,
-        finAirfoilSection=cfg.components.fin_airfoil_section,
-        finCount=cfg.components.fin_count,
-        finSpan__mm=cfg.components.fin_span_mm,
-        finSweepDistance__mm=cfg.components.fin_sweep_distance_mm,
-        finTipChord__mm=cfg.components.fin_tip_chord_mm,
-        finLeadingEdgeRadius__mm=cfg.components.fin_leading_edge_radius_mm,
-        finThickness__mm=cfg.components.fin_thickness_mm,
-        color=cfg.rasaero_vehicle.color,
-    )
+    rocket = _build_rocket(cfg)
 
     simulation = Simulation(
         modifiedBarrowmanFlag=cfg.rasaero_sim.modified_barrowman,

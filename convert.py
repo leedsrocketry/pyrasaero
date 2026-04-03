@@ -39,9 +39,10 @@ COL_CNALPHA = 11
 COL_CP = 12
 COL_RE = 14
 
-# Aft-to-fore component order (matches rasaero-export-tool).
-# Iteration is reversed: NoseCone -> BodyTube -> FinCan -> Fin -> BoatTail.
-AFT_COMPONENT_ORDER = ("BoatTail", "Fin", "FinCan", "BodyTube", "NoseCone")
+# Aft-to-fore component order.  Each entry names the aftmost component
+# present in that cumulative assembly.
+# Iteration is reversed for differencing: NoseCone -> BodyTube -> BoatTail -> Fin.
+AFT_COMPONENT_ORDER = ("Fin", "BoatTail", "BodyTube", "NoseCone")
 
 # Row layout used internally (8 columns).
 I_MACH, I_RE, I_AOA = 0, 1, 2
@@ -117,6 +118,12 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
 
     if not src_dir.is_dir():
         raise SystemExit(f"Source directory not found: {src_dir}")
+
+    # Remove stale aero table CSVs from previous runs
+    if dst_dir.is_dir():
+        for f in dst_dir.iterdir():
+            if f.suffix.lower() == ".csv":
+                f.unlink()
 
     print(f"Vehicle length: {vehicle_len_mm:.1f} mm")
 
@@ -233,7 +240,7 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
         rows.sort(key=lambda r: (r[I_MACH], r[I_RE], r[I_AOA]))
 
         # Write CSV — 8 columns, CN_alpha_per_rad appended after CP_m
-        dst_path = dst_dir / f"{comp}.csv"
+        dst_path = dst_dir / f"{comp.lower()}.csv"
         with open(dst_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["Mach", "Reynolds", "AoA_deg",
@@ -249,7 +256,7 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
     ca_sum = 0.0
     cn_sum = 0.0
     for comp in fore_to_aft:
-        p = dst_dir / f"{comp}.csv"
+        p = dst_dir / f"{comp.lower()}.csv"
         with open(p, newline="") as f:
             reader = csv.reader(f)
             next(reader)
@@ -263,7 +270,7 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
 
     print("\n--- Verification (CN sum at M=0.5, AoA=2) ---")
     for comp in fore_to_aft:
-        p = dst_dir / f"{comp}.csv"
+        p = dst_dir / f"{comp.lower()}.csv"
         with open(p, newline="") as f:
             reader = csv.reader(f)
             next(reader)
@@ -274,5 +281,21 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
                     cn_sum += cn
                     break
     print(f"  {'SUM':>10}: CN = {cn_sum:.6f}")
+
+    # Check CA_on == CA_off for all components except NoseCone
+    print("\n--- Verification (CA_on vs CA_off at M=0.5, AoA=0) ---")
+    for comp in fore_to_aft:
+        p = dst_dir / f"{comp.lower()}.csv"
+        with open(p, newline="") as f:
+            reader = csv.reader(f)
+            next(reader)
+            for row in reader:
+                if abs(float(row[0]) - 0.5) < 0.01 and float(row[2]) == 0:
+                    ca_off = float(row[3])
+                    ca_on = float(row[4])
+                    diff = ca_on - ca_off
+                    status = "  (no delta)" if abs(diff) < 1e-9 else f"  (delta = {diff:+.6f})"
+                    print(f"  {comp:>10}: CA_off={ca_off:+.6f}  CA_on={ca_on:+.6f}{status}")
+                    break
 
     print("\nDone.")
