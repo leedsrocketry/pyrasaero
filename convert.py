@@ -19,6 +19,7 @@ Output: one 8-column CSV per component in ``aero-tables/``.
 from __future__ import annotations
 
 import csv
+import math
 import re
 import statistics
 from pathlib import Path
@@ -58,7 +59,7 @@ def _is_mach_on_grid(mach: float) -> bool:
 
 
 def _load_altitude_file(path: Path) -> list[list[float]]:
-    """Load one aeroplots CSV, filter Mach, extract 8 columns.
+    """Load one aeroplots CSV, extract 8 columns.
 
     Returns rows as [Mach, Re, AoA, CA_off, CA_on, CN, CNAlpha, CP_inches].
     CP is kept in inches here; conversion to metres happens later.
@@ -72,12 +73,8 @@ def _load_altitude_file(path: Path) -> list[list[float]]:
         for line in reader:
             if len(line) < 15:
                 continue
-            mach = float(line[COL_MACH])
-            if not _is_mach_on_grid(mach):
-                continue
-            mach = round(mach / MACH_STEP) * MACH_STEP
             rows.append([
-                mach,
+                float(line[COL_MACH]),
                 float(line[COL_RE]),
                 float(line[COL_ALPHA]),
                 float(line[COL_CA_OFF]),
@@ -187,16 +184,23 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
                     cna = a[I_CNA] - p[I_CNA]
 
                     if abs(cna) > CNALPHA_EPS:
-                        cp = (a[I_CP] * a[I_CNA] - p[I_CP] * p[I_CNA]) / cna
+                        # When both cumulative CN values are zero (AoA=0),
+                        # RASAero's cumulative CP is undefined and the
+                        # moment balance produces garbage.  Mark as NaN
+                        # and backfill from the nearest valid AoA below.
+                        if abs(a[I_CN]) < 1e-12 and abs(p[I_CN]) < 1e-12:
+                            cp = float("nan")
+                        else:
+                            cp = (a[I_CP] * a[I_CNA] - p[I_CP] * p[I_CNA]) / cna
+                        # Clamp destabilising components (negative CNα)
+                        # to the vehicle length.  Their virtual CP can
+                        # be far aft, which is correct for static moment
+                        # balance but causes numerical instability in
+                        # per-component local-AoA lever arm calculations.
+                        if cna < 0 and not math.isnan(cp):
+                            cp = max(0.0, min(cp, vehicle_len_in))
                     else:
                         cp = a[I_CP]
-
-                    # Clamp CP to vehicle length.  When CNα is small the
-                    # moment-balance can produce values far outside the
-                    # airframe; the resulting moment is negligible anyway,
-                    # so a bounded value is safe and avoids polluting the
-                    # interpolation grid.
-                    cp = max(0.0, min(cp, vehicle_len_in))
 
                     comp_output[comp].append([
                         a[I_MACH], vehicle_re, a[I_AOA],
@@ -237,6 +241,20 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
                     rows.append(new_row)
                     filled += 1
 
+        # Backfill NaN CPs.  At AoA=0 (CN=0 for both assemblies) the
+        # cumulative CP from RASAero is undefined, so the moment-balance
+        # was marked NaN above.  Replace with the nearest valid AoA's CP.
+        for key, aoa_map in grid.items():
+            for aoa, row in aoa_map.items():
+                if math.isnan(row[I_CP]):
+                    nearest = min(
+                        (a for a in aoa_map if not math.isnan(aoa_map[a][I_CP])),
+                        key=lambda a: abs(a - aoa),
+                        default=None,
+                    )
+                    if nearest is not None:
+                        row[I_CP] = aoa_map[nearest][I_CP]
+
         rows.sort(key=lambda r: (r[I_MACH], r[I_RE], r[I_AOA]))
 
         # Write CSV — 8 columns, CN_alpha_per_rad appended after CP_m
@@ -250,6 +268,31 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
 
         extra = f" (filled {filled})" if filled else ""
         print(f"  {comp:>10}: {len(rows)} rows{extra} -> {dst_path}")
+
+    # --- Whole-vehicle CSV (from full-vehicle assembly = aftmost component) ---
+    full_vehicle_comp = AFT_COMPONENT_ORDER[0]  # aftmost = full vehicle
+    wv_rows: list[list[float]] = []
+    for alt_ft in altitudes:
+        path = comp_alt_files[full_vehicle_comp].get(alt_ft)
+        if path is None:
+            continue
+        raw = _load_altitude_file(path)
+        vehicle_re = statistics.median(r[I_RE] for r in raw)
+        for r in raw:
+            wv_rows.append([
+                r[I_MACH], vehicle_re, r[I_AOA],
+                r[I_CA_OFF], r[I_CA_ON], r[I_CN],
+                r[I_CP] * INCHES_TO_M,
+            ])
+
+    wv_rows.sort(key=lambda r: (r[0], r[1], r[2]))
+    wv_path = dst_dir.parent / "aero-table.csv"
+    with open(wv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Mach", "Reynolds", "AoA_deg",
+                         "CA_off", "CA_on", "CN", "CP_m"])
+        writer.writerows(wv_rows)
+    print(f"\n  Whole-vehicle: {len(wv_rows)} rows -> {wv_path}")
 
     # --- Verification ---
     print("\n--- Verification (CA_off sum at M=0.5, AoA=0) ---")
