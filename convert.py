@@ -38,7 +38,7 @@ COL_CA_OFF = 5
 COL_CA_ON = 6
 COL_CN = 8
 COL_CNALPHA = 11
-COL_CP = 12
+COL_CP = 13  # "CP (0 to 4 deg)" — linearised Barrowman CP, paired with CNα
 COL_RE = 14
 
 # Aft-to-fore component order.  Each entry names the aftmost component
@@ -216,11 +216,11 @@ def convert(cfg: object, *, max_mach: float | None = None) -> None:
                     cna = a[I_CNA] - p[I_CNA]
 
                     if abs(cna) > CNALPHA_EPS:
-                        # When both cumulative CN values are zero (AoA=0),
-                        # RASAero's cumulative CP is undefined and the
-                        # moment balance produces garbage.  Mark as NaN
-                        # and backfill from the nearest valid AoA below.
-                        if abs(a[I_CN]) < 1e-12 and abs(p[I_CN]) < 1e-12:
+                        # Moment balance using CNα, consistent with the
+                        # linearised CP (column 13, "CP (0 to 4 deg)").
+                        # Both are Barrowman quantities: the telescope
+                        # Σ(CNα_i × CP_i) = CNα_total × CP_total holds.
+                        if abs(a[I_CP]) < 1e-6 and abs(p[I_CP]) < 1e-6:
                             cp = float("nan")
                         else:
                             cp = (a[I_CP] * a[I_CNA] - p[I_CP] * p[I_CNA]) / cna
