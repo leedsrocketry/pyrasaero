@@ -224,13 +224,6 @@ def convert(cfg: object, *, max_mach: float | None = None) -> None:
                             cp = float("nan")
                         else:
                             cp = (a[I_CP] * a[I_CNA] - p[I_CP] * p[I_CNA]) / cna
-                        # Clamp destabilising components (negative CNα)
-                        # to the vehicle length.  Their virtual CP can
-                        # be far aft, which is correct for static moment
-                        # balance but causes numerical instability in
-                        # per-component local-AoA lever arm calculations.
-                        if cna < 0 and not math.isnan(cp):
-                            cp = max(0.0, min(cp, vehicle_len_in))
                     else:
                         cp = a[I_CP]
 
