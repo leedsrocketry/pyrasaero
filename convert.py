@@ -13,7 +13,8 @@ Processing:
   - Convert CP from inches to metres
   - CP moment balance uses CNAlpha to avoid division by zero at AoA=0
 
-Output: one 8-column CSV per component in ``aero-tables/``.
+Output: one 8-column CSV per component in ``aero-tables/``, plus a
+whole-vehicle 8-column CSV (``vehicle-aero-table.csv``) alongside it.
 """
 
 from __future__ import annotations
@@ -96,15 +97,13 @@ def _find_altitude_files(src_dir: Path, component: str) -> list[tuple[int, Path]
     return sorted(hits)
 
 
-def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
+def convert(cfg: object) -> None:
     """Run the conversion pipeline.
 
     Parameters
     ----------
     cfg
         A ``PyrasaeroConfig`` instance (from ``config.load_config``).
-    whole_vehicle
-        If True, output a single whole-vehicle CSV (BoatTail assembly only).
     """
     src_dir = cfg.vehicle_yaml_dir / "rasaero-data"
     dst_dir = cfg.aero_tables_dir
@@ -282,16 +281,17 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
                 wv_rows.append([
                     r[I_MACH], vehicle_re, r[I_AOA],
                     r[I_CA_OFF], r[I_CA_ON], r[I_CN],
-                    r[I_CP] * INCHES_TO_M,
+                    r[I_CP] * INCHES_TO_M, r[I_CNA],
                 ])
 
     wv_rows.sort(key=lambda r: (r[0], r[1], r[2]))
-    wv_path = dst_dir.parent / "aero-table.csv"
+    wv_path = dst_dir.parent / "vehicle-aero-table.csv"
     with open(wv_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Mach", "Reynolds", "AoA_deg",
-                         "CA_off", "CA_on", "CN", "CP_m"])
-        writer.writerows(wv_rows)
+                         "CA_off", "CA_on", "CN", "CP_m", "CN_alpha_per_rad"])
+        for r in wv_rows:
+            writer.writerow([r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]])
     print(f"\n  Whole-vehicle: {len(wv_rows)} rows -> {wv_path}")
 
     # --- Verification ---

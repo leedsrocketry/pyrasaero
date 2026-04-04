@@ -59,7 +59,6 @@ Reads the simulation YAML, generates a CDX1 from the vehicle config, drives RASA
 | Flag | Effect |
 |------|--------|
 | `--aeroplots-convert` | Skip the slow aero plots RASAero export; only convert existing CSVs in `rasaero-data/`. Flight simulation export still runs. |
-| `--whole-vehicle` | Output a single whole-vehicle aero table instead of per-component |
 | `--altitude-step` `FLOAT` | Altitude grid spacing in metres (default 2000) |
 | `--max-altitude` `FLOAT` | Maximum altitude in metres (default 20000) |
 | `--time-base` `FLOAT` | Flight simulation export time step in seconds (default 0.01). Snapped down to nearest valid value: 0.01, 0.1, 0.5, or 1.0. |
@@ -95,9 +94,25 @@ The shared vehicle YAML (e.g. `g2b2-o3400.yaml`). pyrasaero reads:
 
 ## Output Files
 
-### Aero Table CSVs
+### Per-Component Aero Table CSVs
 
 One CSV per aerodynamic component, written to `aero-tables/` next to the vehicle YAML.
+
+| Column | Description |
+|--------|-------------|
+| `Mach` | Mach number |
+| `Reynolds` | Reynolds number |
+| `AoA_deg` | Angle of attack (degrees) |
+| `CA_off` | Axial force coefficient, motor off |
+| `CA_on` | Axial force coefficient, motor on |
+| `CN` | Normal force coefficient |
+| `CP_m` | Centre of pressure, metres from nose tip |
+| `CN_alpha_per_rad` | Normal force slope (1/rad) |
+
+
+### Whole-Vehicle Aero Table CSV
+
+A single `vehicle-aero-table.csv` written next to the `aero-tables/` directory. This contains the whole-vehicle (BoatTail assembly) aerodynamic data without per-component differencing.
 
 | Column | Description |
 |--------|-------------|

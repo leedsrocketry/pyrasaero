@@ -62,8 +62,6 @@ def main() -> None:
 
 @main.command()
 @click.argument("simulation_yaml", type=click.Path(exists=True, path_type=Path))
-@click.option("--whole-vehicle", is_flag=True,
-              help="Output a single whole-vehicle aero table instead of per-component.")
 @click.option("--aeroplots-convert", is_flag=True,
               help="Skip RASAero aero plots export; only convert existing CSVs. "
                    "Flight simulation export still runs.")
@@ -76,7 +74,6 @@ def main() -> None:
                    "Snapped down to nearest valid value: 0.01, 0.1, 0.5, or 1.0.")
 def run(
     simulation_yaml: Path,
-    whole_vehicle: bool,
     aeroplots_convert: bool,
     altitude_step: float,
     max_altitude: float,
@@ -136,7 +133,7 @@ def run(
 
     # --- Conversion ---
     from convert import convert
-    convert(cfg, whole_vehicle=whole_vehicle)
+    convert(cfg)
     click.echo(f"Aero tables written to {cfg.aero_tables_dir}")
 
 
