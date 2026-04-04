@@ -121,7 +121,9 @@ class RASAero():
     # in each assembly gives its name to the exported CSV.
     aftComponentOrder = ("Fin", "BoatTail", "BodyTube", "NoseCone")
     guiShortDelay__s = 0.5
-    guiLongDelay__s = 2.0
+    guiLongDelay__s = 1.0
+    simulationDelay__s = 2.0
+    simulationDataDelay__s = 3.0
 
     @staticmethod
     def killAll():
@@ -211,9 +213,11 @@ class RASAero():
         if self.window:
             # Close main window
             keyboard.send("alt + f4")
-            
-            # Don"t save changes
+            sleep(self.guiShortDelay__s)
+
+            # Don't save changes
             keyboard.send("tab")
+            sleep(self.guiShortDelay__s)
             keyboard.send("enter")
 
             self.window = None
@@ -236,7 +240,7 @@ class RASAero():
         open_btn.click_input()
 
         # Give window some time to load
-        sleep(self.guiLongDelay__s)
+        sleep(self.guiShortDelay__s)
         self.open = True
 
     def exportFigure(self):
@@ -257,9 +261,151 @@ class RASAero():
         figure = screenshot.crop((left, top, right, bottom))
         figure.save(self.rocketIllustrationFullPath)
     
-    # TODO: Implement properly
-    def exportFlightSimulation(self):
-        return None
+    def exportFlightSimulation(self, timeBase: float = 0.01):
+        """Automate RASAero II to run a flight simulation and export data to CSV.
+
+        Parameters
+        ----------
+        timeBase
+            Desired export time step in seconds.  Snapped down to the nearest
+            valid RASAero option: 0.01, 0.1, 0.5, or 1.0.
+        """
+        # --- Snap time base to nearest valid value ---
+        validBases = [0.01, 0.1, 0.5, 1.0]
+        snapped = validBases[0]
+        for v in validBases:
+            if v <= timeBase:
+                snapped = v
+        if snapped != timeBase:
+            print(f"Time base {timeBase} snapped to {snapped}")
+
+        downPresses = {0.01: 0, 0.1: 1, 0.5: 2, 1.0: 3}[snapped]
+
+        # Delete any existing flight simulation CSV to avoid overwrite pop-ups
+        if os.path.isfile(self.flightSimulationFullPath):
+            os.remove(self.flightSimulationFullPath)
+
+        # 1. Open the CDX1 file
+        self.openFile(self.rocketDefinitionPath)
+
+        # 2. Click "Flight Simulation" button
+        dlg = self.retry(lambda: Desktop(backend="uia").window(title_re="RASAero II"))
+        btn = dlg.child_window(title_re="Flight Sim", control_type="Button")
+        btn.click_input()
+        sleep(self.guiLongDelay__s)
+
+        # 3. Run simulation: Alt → right → down → down → enter
+        keyboard.send("alt")
+        sleep(self.guiShortDelay__s)
+        keyboard.send("right")
+        sleep(self.guiShortDelay__s)
+        keyboard.send("down")
+        sleep(self.guiShortDelay__s)
+        keyboard.send("down")
+        sleep(self.guiShortDelay__s)
+        keyboard.send("enter")
+
+        # 4–5. Navigate to "View Data" button while simulation runs.
+        #       The simulation completes before we finish navigating.
+        for _ in range(7):
+            keyboard.send("right")
+            sleep(self.guiShortDelay__s)
+
+        # 6. Click "View Data"
+        # The button is embedded in a DataGridView; pywinauto cannot
+        # reliably locate it, but space activates the focused cell.
+        keyboard.send("space")
+
+        # 7. Wait for simulation data window (slower to open than other windows)
+        sleep(self.simulationDataDelay__s)
+
+        # 8. Export to CSV: alt+f → right → enter
+        keyboard.send("alt+f")
+        sleep(self.guiShortDelay__s)
+        keyboard.send("right")
+        sleep(self.guiShortDelay__s)
+        keyboard.send("enter")
+        sleep(self.guiShortDelay__s)
+
+        # 9. Select time base
+        for _ in range(downPresses):
+            keyboard.send("down")
+            sleep(self.guiShortDelay__s)
+
+        # 10. Confirm time base: tab → enter
+        keyboard.send("tab")
+        sleep(self.guiShortDelay__s)
+        keyboard.send("enter")
+        sleep(self.guiLongDelay__s)
+
+        # 11. Enter file path in save dialog and save
+        keyboard.write(self.flightSimulationFullPath)
+        keyboard.send("enter")
+        sleep(self.guiLongDelay__s)
+
+        # 12. Close data window, then flight sim window
+        keyboard.send("alt+f4")
+        sleep(self.guiShortDelay__s)
+        keyboard.send("alt+f4")
+        sleep(self.guiShortDelay__s)
+        # Flight sim window asks to save changes — don't save
+        keyboard.send("tab")
+        sleep(self.guiShortDelay__s)
+        keyboard.send("enter")
+
+        self.window = None
+
+    def reformatFlightSimulation(self, outputPath: str):
+        """Read the raw RASAero flight simulation CSV, convert to SI units with
+        lowercase snake_case headers, and write to *outputPath*.
+
+        The raw RASAero export uses entirely imperial units.  This method
+        converts every column to SI and renames headers to match the LFS
+        convention (lowercase snake_case with units).
+        """
+        df = pd.read_csv(self.flightSimulationFullPath)
+
+        # Unit conversions (imperial → SI)
+        lbf_to_n = 4.44822
+        lb_to_kg = 0.453592
+        in_to_m = 0.0254
+        ft_to_m = 0.3048
+
+        conversions: dict[str, tuple[str, float]] = {
+            "Time (sec)":            ("time_s",                        1.0),
+            "Stage":                 ("stage",                         1.0),
+            "Stage Time (sec)":      ("stage_time_s",                  1.0),
+            "Mach Number":           ("mach",                          1.0),
+            "Angle of Attack (deg)": ("aoa_deg",                       1.0),
+            "CD":                    ("cd",                            1.0),
+            "Thrust (lb)":           ("thrust_n",                      lbf_to_n),
+            "Weight (lb)":           ("mass_kg",                       lb_to_kg),
+            "Drag (lb)":             ("drag_n",                        lbf_to_n),
+            "Lift (lb)":             ("lift_n",                        lbf_to_n),
+            "CG (in)":              ("cg_m",                          in_to_m),
+            "CP (in)":              ("cp_m",                          in_to_m),
+            "Stability Margin (cal)": ("stability_margin_cal",        1.0),
+            "Accel (ft/sec^2)":      ("acceleration_ms2",             ft_to_m),
+            "Accel-V (ft/sec^2)":    ("acceleration_vertical_ms2",    ft_to_m),
+            "Accel-H (ft/sec^2)":    ("acceleration_horizontal_ms2",  ft_to_m),
+            "Velocity (ft/sec)":     ("velocity_ms",                  ft_to_m),
+            "Vel-V (ft/sec)":        ("velocity_vertical_ms",         ft_to_m),
+            "Vel-H (ft/sec)":        ("velocity_horizontal_ms",       ft_to_m),
+            "Pitch Attitude (deg)":  ("pitch_attitude_deg",           1.0),
+            "Flight Path Angle (deg)": ("flight_path_angle_deg",      1.0),
+            "Altitude (ft)":         ("altitude_m",                   ft_to_m),
+            "Distance (ft)":         ("distance_m",                   ft_to_m),
+        }
+
+        out = pd.DataFrame()
+        for raw_col, (new_col, factor) in conversions.items():
+            if raw_col in df.columns:
+                if factor == 1.0:
+                    out[new_col] = df[raw_col]
+                else:
+                    out[new_col] = df[raw_col] * factor
+
+        out.to_csv(outputPath, index=False)
     
     def exportAeroPlots(self, altitudes):
         # Delete any existing aeroplot CSVs to avoid overwrite pop-ups

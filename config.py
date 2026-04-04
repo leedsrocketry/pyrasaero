@@ -100,6 +100,7 @@ class PyrasaeroConfig:
     vehicle_yaml_dir: Path
     aero_tables_dir: Path
     cdx1_path: Path
+    flight_sim_output_path: Path | None
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +219,9 @@ def load_config(simulation_yaml_path: Path) -> PyrasaeroConfig:
     aero_tables_dir = vehicle_dir / "aero-tables"
     cdx1_path = vehicle_dir / f"{vehicle_path.stem}.CDX1"
 
+    ref_traj = sim_raw.get("verification", {}).get("reference_trajectory")
+    flight_sim_output_path = (sim_dir / ref_traj).resolve() if ref_traj else None
+
     return PyrasaeroConfig(
         components=components,
         mass=mass,
@@ -227,4 +231,5 @@ def load_config(simulation_yaml_path: Path) -> PyrasaeroConfig:
         vehicle_yaml_dir=vehicle_dir,
         aero_tables_dir=aero_tables_dir,
         cdx1_path=cdx1_path,
+        flight_sim_output_path=flight_sim_output_path,
     )

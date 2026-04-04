@@ -9,7 +9,7 @@ Processing:
   - For each altitude file, load all 5 assemblies and difference positionally
   - Use vehicle-level Re (from BoatTail / full vehicle assembly) for all
   - Quantise Re per altitude (median across Mach values)
-  - Decimate Mach to 0.1 spacing, cap at 5.0
+  - Decimate Mach to 0.1 spacing
   - Convert CP from inches to metres
   - CP moment balance uses CNAlpha to avoid division by zero at AoA=0
 
@@ -27,7 +27,6 @@ from pathlib import Path
 INCHES_TO_M = 0.0254
 MACH_TOL = 0.005
 MACH_STEP = 0.1
-MACH_MAX = 5.0
 CNALPHA_EPS = 1.0e-6
 
 # RASAero CSV column indices (15-column aeroplot format)
@@ -51,9 +50,7 @@ I_CA_OFF, I_CA_ON, I_CN, I_CNA, I_CP = 3, 4, 5, 6, 7
 
 
 def _is_mach_on_grid(mach: float) -> bool:
-    """True if *mach* is within tolerance of a 0.1-spaced grid point <= 5.0."""
-    if mach > MACH_MAX + MACH_TOL:
-        return False
+    """True if *mach* is within tolerance of a 0.1-spaced grid point."""
     remainder = mach / MACH_STEP
     return abs(remainder - round(remainder)) < MACH_TOL / MACH_STEP
 
@@ -202,20 +199,22 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
                     else:
                         cp = a[I_CP]
 
-                    comp_output[comp].append([
-                        a[I_MACH], vehicle_re, a[I_AOA],
-                        ca_off, ca_on, cn, cna,
-                        cp * INCHES_TO_M,
-                    ])
+                    if _is_mach_on_grid(a[I_MACH]):
+                        comp_output[comp].append([
+                            a[I_MACH], vehicle_re, a[I_AOA],
+                            ca_off, ca_on, cn, cna,
+                            cp * INCHES_TO_M,
+                        ])
             else:
                 # First assembly (NoseCone): contribution = cumulative
                 for j in range(n):
                     a = asm[j]
-                    comp_output[comp].append([
-                        a[I_MACH], vehicle_re, a[I_AOA],
-                        a[I_CA_OFF], a[I_CA_ON], a[I_CN], a[I_CNA],
-                        a[I_CP] * INCHES_TO_M,
-                    ])
+                    if _is_mach_on_grid(a[I_MACH]):
+                        comp_output[comp].append([
+                            a[I_MACH], vehicle_re, a[I_AOA],
+                            a[I_CA_OFF], a[I_CA_ON], a[I_CN], a[I_CNA],
+                            a[I_CP] * INCHES_TO_M,
+                        ])
 
             # Save raw cumulative rows (NOT component rows) for next iteration
             prev_rows = [list(r) for r in asm]
@@ -279,11 +278,12 @@ def convert(cfg: object, *, whole_vehicle: bool = False) -> None:
         raw = _load_altitude_file(path)
         vehicle_re = statistics.median(r[I_RE] for r in raw)
         for r in raw:
-            wv_rows.append([
-                r[I_MACH], vehicle_re, r[I_AOA],
-                r[I_CA_OFF], r[I_CA_ON], r[I_CN],
-                r[I_CP] * INCHES_TO_M,
-            ])
+            if _is_mach_on_grid(r[I_MACH]):
+                wv_rows.append([
+                    r[I_MACH], vehicle_re, r[I_AOA],
+                    r[I_CA_OFF], r[I_CA_ON], r[I_CN],
+                    r[I_CP] * INCHES_TO_M,
+                ])
 
     wv_rows.sort(key=lambda r: (r[0], r[1], r[2]))
     wv_path = dst_dir.parent / "aero-table.csv"

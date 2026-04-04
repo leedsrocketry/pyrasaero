@@ -64,58 +64,75 @@ def main() -> None:
 @click.argument("simulation_yaml", type=click.Path(exists=True, path_type=Path))
 @click.option("--whole-vehicle", is_flag=True,
               help="Output a single whole-vehicle aero table instead of per-component.")
-@click.option("--convert-only", is_flag=True,
-              help="Skip RASAero export; only convert existing CSVs.")
+@click.option("--aeroplots-convert", is_flag=True,
+              help="Skip RASAero aero plots export; only convert existing CSVs. "
+                   "Flight simulation export still runs.")
 @click.option("--altitude-step", type=float, default=2000,
               help="Altitude grid spacing in metres (default 2000).")
 @click.option("--max-altitude", type=float, default=20000,
               help="Maximum altitude in metres (default 20000).")
+@click.option("--time-base", type=float, default=0.01,
+              help="Flight simulation export time step in seconds (default 0.01). "
+                   "Snapped down to nearest valid value: 0.01, 0.1, 0.5, or 1.0.")
 def run(
     simulation_yaml: Path,
     whole_vehicle: bool,
-    convert_only: bool,
+    aeroplots_convert: bool,
     altitude_step: float,
     max_altitude: float,
+    time_base: float,
 ) -> None:
     """Run the full pyrasaero pipeline: CDX1 generation, RASAero export, conversion."""
     cfg = load_config(simulation_yaml)
 
-    if not convert_only:
-        from automation import Simulation, RASAero
+    from automation import Simulation, RASAero
 
-        rocket = _build_rocket(cfg)
+    rocket = _build_rocket(cfg)
 
-        simulation = Simulation(
-            modifiedBarrowmanFlag=cfg.rasaero_sim.modified_barrowman,
-            turbulenceFlag=cfg.rasaero_sim.turbulence,
-            launchsiteElevation__m=cfg.rasaero_sim.elevation_m,
-            launchInclination__deg=cfg.rasaero_sim.inclination_deg,
-            launchRailLength__m=cfg.rasaero_sim.rail_length_m,
-            launchsiteTemperature__degC=cfg.rasaero_sim.temperature_deg_c,
-            windSpeed__m_s=cfg.rasaero_sim.wind_speed_m_s,
-        )
+    simulation = Simulation(
+        modifiedBarrowmanFlag=cfg.rasaero_sim.modified_barrowman,
+        turbulenceFlag=cfg.rasaero_sim.turbulence,
+        launchsiteElevation__m=cfg.rasaero_sim.elevation_m,
+        launchInclination__deg=cfg.rasaero_sim.inclination_deg,
+        launchRailLength__m=cfg.rasaero_sim.rail_length_m,
+        launchsiteTemperature__degC=cfg.rasaero_sim.temperature_deg_c,
+        windSpeed__m_s=cfg.rasaero_sim.wind_speed_m_s,
+    )
 
-        rasaero_data_dir = cfg.vehicle_yaml_dir / "rasaero-data"
-        rasaero_data_dir.mkdir(exist_ok=True)
+    rasaero_data_dir = cfg.vehicle_yaml_dir / "rasaero-data"
+    rasaero_data_dir.mkdir(exist_ok=True)
 
-        cdx1_path = str(cfg.cdx1_path)
-        aeroplots_path = str(rasaero_data_dir / "aeroplots.csv")
-        flight_sim_path = str(rasaero_data_dir / "flight-simulation.csv")
+    cdx1_path = str(cfg.cdx1_path)
+    aeroplots_path = str(rasaero_data_dir / "aeroplots.csv")
+    flight_sim_path = str(rasaero_data_dir / "flight-simulation.csv")
 
-        ra = RASAero(cdx1_path, flight_sim_path, flight_sim_path, aeroplots_path)
-        try:
-            ra.exportRocketDefinition(rocket, simulation)
-            click.echo(f"CDX1 written to {cfg.cdx1_path}")
+    ra = RASAero(cdx1_path, flight_sim_path, flight_sim_path, aeroplots_path)
+    try:
+        ra.exportRocketDefinition(rocket, simulation)
+        click.echo(f"CDX1 written to {cfg.cdx1_path}")
 
+        if not aeroplots_convert:
+            # Aero plots export is extremely slow: each iteration (one
+            # altitude for one cumulative assembly) takes ~14 seconds of
+            # GUI automation.  With 4 components and the default altitude
+            # grid (0–20 000 m, step 2 000 m = 11 altitudes) that is
+            # 4 × 11 = 44 iterations ≈ 10 minutes.
             altitudes = list(range(0, int(max_altitude) + 1, int(altitude_step)))
             ra.exportAeroPlots(altitudes)
             click.echo(f"Aeroplots exported to {rasaero_data_dir}")
-        except (Exception, KeyboardInterrupt):
-            click.echo("\nClosing RASAero II...")
-            RASAero.killAll()
-            raise
-        finally:
-            RASAero.killAll()
+
+        ra.exportFlightSimulation(time_base)
+        click.echo(f"Flight simulation exported to {flight_sim_path}")
+
+        if cfg.flight_sim_output_path:
+            ra.reformatFlightSimulation(str(cfg.flight_sim_output_path))
+            click.echo(f"Flight simulation (SI) written to {cfg.flight_sim_output_path}")
+    except (Exception, KeyboardInterrupt):
+        click.echo("\nClosing RASAero II...")
+        RASAero.killAll()
+        raise
+    finally:
+        RASAero.killAll()
 
     # --- Conversion ---
     from convert import convert
