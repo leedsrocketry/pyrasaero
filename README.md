@@ -52,15 +52,13 @@ pip install click pyyaml numpy pandas scipy pywinauto keyboard Pillow
 python -m pyrasaero run <simulation.yaml>
 ```
 
-Reads the simulation YAML, generates a CDX1 from the vehicle config, drives RASAero II to export aeroplots at each altitude and run a flight simulation, then converts the cumulative aeroplot exports into per-component LFS aero tables and reformats the flight simulation CSV to SI units.
+Reads the simulation YAML, generates a CDX1 from the vehicle config, drives RASAero II to run a flight simulation first, then uses the simulated flight envelope (apogee and peak Mach) to determine the aeroplot export altitude grid and Mach cap. The cumulative aeroplot exports are converted into per-component LFS aero tables with a properly resolved Reynolds number axis (see [Aerodynamic Table Format](#aerodynamic-table-format)). The flight simulation CSV is reformatted to SI units.
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
 | `--aeroplots-convert` | Skip the slow aero plots RASAero export; only convert existing CSVs in `rasaero-data/`. Flight simulation export still runs. |
-| `--altitude-step` `FLOAT` | Altitude grid spacing in metres (default 2000) |
-| `--max-altitude` `FLOAT` | Maximum altitude in metres (default 20000) |
 | `--time-base` `FLOAT` | Flight simulation export time step in seconds (default 0.01). Snapped down to nearest valid value: 0.01, 0.1, 0.5, or 1.0. |
 
 ### Write CDX1 only
@@ -94,9 +92,9 @@ The shared vehicle YAML (e.g. `g2b2-o3400.yaml`). pyrasaero reads:
 
 ## Output Files
 
-### Per-Component Aero Table CSVs
+### Aerodynamic Table Format
 
-One CSV per aerodynamic component, written to `aero-tables/` next to the vehicle YAML.
+Both per-component and whole-vehicle tables share the same 8-column CSV format and the same 3D grid structure: (Mach, Reynolds, AoA). The tables are designed for trilinear interpolation by LFS.
 
 | Column | Description |
 |--------|-------------|
@@ -109,21 +107,19 @@ One CSV per aerodynamic component, written to `aero-tables/` next to the vehicle
 | `CP_m` | Centre of pressure, metres from nose tip |
 | `CN_alpha_per_rad` | Normal force slope (1/rad) |
 
+**Mach axis:** retains the full resolution from the RASAero aeroplot export, capped at the nearest whole number 20% above the peak Mach from the RASAero flight simulation. This keeps the table compact by excluding Mach values that are never encountered in flight, reducing memory usage in LFS.
+
+**Reynolds axis:** a regular log-spaced grid covering the full range of Reynolds numbers present in the aeroplot data. Each altitude file from RASAero provides aerodynamic coefficients at actual flight Reynolds numbers (Re = rho * V * L / mu, which varies with both altitude and Mach). For each (Mach, AoA) combination, the values from all altitude files are interpolated onto this common Re grid, so LFS can look up coefficients at any flight Reynolds number and receive data corresponding to the correct aerodynamic environment.
+
+**AoA axis:** retains the values from the RASAero aeroplot export (typically 0, 2, and 4 degrees).
+
+### Per-Component Aero Table CSVs
+
+One CSV per aerodynamic component, written to `aero-tables/` next to the vehicle YAML. Per-component contributions are extracted by differencing successive cumulative assemblies exported from RASAero.
 
 ### Whole-Vehicle Aero Table CSV
 
-A single `vehicle-aero-table.csv` written next to the `aero-tables/` directory. This contains the whole-vehicle (BoatTail assembly) aerodynamic data without per-component differencing.
-
-| Column | Description |
-|--------|-------------|
-| `Mach` | Mach number |
-| `Reynolds` | Reynolds number |
-| `AoA_deg` | Angle of attack (degrees) |
-| `CA_off` | Axial force coefficient, motor off |
-| `CA_on` | Axial force coefficient, motor on |
-| `CN` | Normal force coefficient |
-| `CP_m` | Centre of pressure, metres from nose tip |
-| `CN_alpha_per_rad` | Normal force slope (1/rad) |
+A single `vehicle-aero-table.csv` written next to the `aero-tables/` directory. This contains the whole-vehicle (full cumulative assembly) aerodynamic data without per-component differencing.
 
 
 ### Flight Simulation CSV

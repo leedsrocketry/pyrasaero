@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+import csv
+import math
 from pathlib import Path
 
 import click
 
 from config import load_config, PyrasaeroConfig
+
+
+def _read_flight_envelope(path: Path) -> tuple[float, float]:
+    """Return (max_altitude_m, max_mach) from a reformatted flight sim CSV."""
+    max_alt = 0.0
+    max_mach = 0.0
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            alt = float(row["altitude_m"])
+            mach = float(row["mach"])
+            if alt > max_alt:
+                max_alt = alt
+            if mach > max_mach:
+                max_mach = mach
+    return max_alt, max_mach
 
 
 def _build_rocket(cfg: PyrasaeroConfig):
@@ -65,21 +83,19 @@ def main() -> None:
 @click.option("--aeroplots-convert", is_flag=True,
               help="Skip RASAero aero plots export; only convert existing CSVs. "
                    "Flight simulation export still runs.")
-@click.option("--altitude-step", type=float, default=2000,
-              help="Altitude grid spacing in metres (default 2000).")
-@click.option("--max-altitude", type=float, default=20000,
-              help="Maximum altitude in metres (default 20000).")
 @click.option("--time-base", type=float, default=0.01,
               help="Flight simulation export time step in seconds (default 0.01). "
                    "Snapped down to nearest valid value: 0.01, 0.1, 0.5, or 1.0.")
 def run(
     simulation_yaml: Path,
     aeroplots_convert: bool,
-    altitude_step: float,
-    max_altitude: float,
     time_base: float,
 ) -> None:
-    """Run the full pyrasaero pipeline: CDX1 generation, RASAero export, conversion."""
+    """Run the full pyrasaero pipeline: CDX1 generation, RASAero export, conversion.
+
+    The flight simulation is run first so that the aeroplot altitude grid
+    and Mach cap can be derived from the simulated flight envelope.
+    """
     cfg = load_config(simulation_yaml)
 
     from automation import Simulation, RASAero
@@ -108,22 +124,30 @@ def run(
         ra.exportRocketDefinition(rocket, simulation)
         click.echo(f"CDX1 written to {cfg.cdx1_path}")
 
-        if not aeroplots_convert:
-            # Aero plots export is extremely slow: each iteration (one
-            # altitude for one cumulative assembly) takes ~14 seconds of
-            # GUI automation.  With 4 components and the default altitude
-            # grid (0–20 000 m, step 2 000 m = 11 altitudes) that is
-            # 4 × 11 = 44 iterations ≈ 10 minutes.
-            altitudes = list(range(0, int(max_altitude) + 1, int(altitude_step)))
-            ra.exportAeroPlots(altitudes)
-            click.echo(f"Aeroplots exported to {rasaero_data_dir}")
-
+        # --- Flight simulation first (informs aeroplot export parameters) ---
         ra.exportFlightSimulation(time_base)
         click.echo(f"Flight simulation exported to {flight_sim_path}")
 
         if cfg.flight_sim_output_path:
             ra.reformatFlightSimulation(str(cfg.flight_sim_output_path))
             click.echo(f"Flight simulation (SI) written to {cfg.flight_sim_output_path}")
+
+        # --- Derive aeroplot export parameters from the flight envelope ---
+        max_alt, max_mach_sim = _read_flight_envelope(cfg.flight_sim_output_path)
+        max_mach = float(math.ceil(max_mach_sim * 1.2))
+        max_altitude = max_alt * 1.2
+        # ~20 altitude steps, rounded to a clean spacing
+        altitude_step = max(500.0, round(max_altitude / 20 / 500) * 500)
+        max_altitude = math.ceil(max_altitude / altitude_step) * altitude_step
+
+        click.echo(f"Flight envelope: apogee {max_alt:.0f} m, peak Mach {max_mach_sim:.2f}")
+        click.echo(f"Export grid: 0–{max_altitude:.0f} m (step {altitude_step:.0f} m), "
+                    f"Mach cap {max_mach:.0f}")
+
+        if not aeroplots_convert:
+            altitudes = list(range(0, int(max_altitude) + 1, int(altitude_step)))
+            ra.exportAeroPlots(altitudes)
+            click.echo(f"Aeroplots exported to {rasaero_data_dir}")
     except (Exception, KeyboardInterrupt):
         click.echo("\nClosing RASAero II...")
         RASAero.killAll()
@@ -133,7 +157,7 @@ def run(
 
     # --- Conversion ---
     from convert import convert
-    convert(cfg)
+    convert(cfg, max_mach=max_mach)
     click.echo(f"Aero tables written to {cfg.aero_tables_dir}")
 
 

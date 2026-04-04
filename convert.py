@@ -7,9 +7,9 @@ component contributions.
 
 Processing:
   - For each altitude file, load all 5 assemblies and difference positionally
-  - Use vehicle-level Re (from BoatTail / full vehicle assembly) for all
-  - Quantise Re per altitude (median across Mach values)
-  - Decimate Mach to 0.1 spacing
+  - Use actual per-row Reynolds number from the full-vehicle assembly
+  - Resample all value columns onto a regular log-spaced Re grid
+  - Cap Mach at the simulation-derived maximum
   - Convert CP from inches to metres
   - CP moment balance uses CNAlpha to avoid division by zero at AoA=0
 
@@ -22,13 +22,14 @@ from __future__ import annotations
 import csv
 import math
 import re
-import statistics
+from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
+
 INCHES_TO_M = 0.0254
-MACH_TOL = 0.005
-MACH_STEP = 0.1
 CNALPHA_EPS = 1.0e-6
+N_RE_GRID = 25  # number of log-spaced Re grid points
 
 # RASAero CSV column indices (15-column aeroplot format)
 COL_MACH = 0
@@ -50,10 +51,38 @@ I_MACH, I_RE, I_AOA = 0, 1, 2
 I_CA_OFF, I_CA_ON, I_CN, I_CNA, I_CP = 3, 4, 5, 6, 7
 
 
-def _is_mach_on_grid(mach: float) -> bool:
-    """True if *mach* is within tolerance of a 0.1-spaced grid point."""
-    remainder = mach / MACH_STEP
-    return abs(remainder - round(remainder)) < MACH_TOL / MACH_STEP
+def _resample_re(
+    rows: list[list[float]],
+    re_target: np.ndarray,
+) -> list[list[float]]:
+    """Resample rows from actual per-row Re onto a regular Re grid.
+
+    For each (Mach, AoA) group, interpolates all value columns from the
+    source Re points (one per altitude) onto *re_target* using
+    ``np.interp`` (clamps at boundaries).
+    """
+    value_cols = (I_CA_OFF, I_CA_ON, I_CN, I_CNA, I_CP)
+
+    groups: dict[tuple[float, float], list[list[float]]] = defaultdict(list)
+    for r in rows:
+        groups[(r[I_MACH], r[I_AOA])].append(r)
+
+    resampled: list[list[float]] = []
+    for (mach, aoa), pts in groups.items():
+        pts.sort(key=lambda r: r[I_RE])
+        src_re = np.array([p[I_RE] for p in pts])
+        src_vals = {col: np.array([p[col] for p in pts]) for col in value_cols}
+
+        for re_val in re_target:
+            new_row = [0.0] * 8
+            new_row[I_MACH] = mach
+            new_row[I_RE] = float(re_val)
+            new_row[I_AOA] = aoa
+            for col in value_cols:
+                new_row[col] = float(np.interp(re_val, src_re, src_vals[col]))
+            resampled.append(new_row)
+
+    return resampled
 
 
 def _load_altitude_file(path: Path) -> list[list[float]]:
@@ -97,13 +126,17 @@ def _find_altitude_files(src_dir: Path, component: str) -> list[tuple[int, Path]
     return sorted(hits)
 
 
-def convert(cfg: object) -> None:
+def convert(cfg: object, *, max_mach: float | None = None) -> None:
     """Run the conversion pipeline.
 
     Parameters
     ----------
     cfg
         A ``PyrasaeroConfig`` instance (from ``config.load_config``).
+    max_mach
+        If given, discard rows with Mach > *max_mach*.  Reduces table
+        size for LFS by removing Mach values that are never encountered
+        in flight.
     """
     src_dir = cfg.vehicle_yaml_dir / "rasaero-data"
     dst_dir = cfg.aero_tables_dir
@@ -159,9 +192,9 @@ def convert(cfg: object) -> None:
                     f"{fore_to_aft[0]} has {n}, {comp} has {len(asm_data[comp])}"
                 )
 
-        # Vehicle-level Re: from BoatTail (full vehicle), quantised to median
-        vehicle_re_values = [r[I_RE] for r in asm_data["BoatTail"]]
-        vehicle_re = statistics.median(vehicle_re_values)
+        # Use actual per-row Re from the full-vehicle (BoatTail) assembly.
+        # Re is identical across all cumulative assemblies at the same row.
+        full_vehicle_re = [r[I_RE] for r in asm_data["BoatTail"]]
 
         # Difference fore to aft
         vehicle_len_in = vehicle_len_mm / 25.4
@@ -173,6 +206,9 @@ def convert(cfg: object) -> None:
                 for j in range(n):
                     a = asm[j]
                     p = prev_rows[j]
+
+                    if max_mach is not None and a[I_MACH] > max_mach:
+                        continue
 
                     ca_off = a[I_CA_OFF] - p[I_CA_OFF]
                     ca_on = a[I_CA_ON] - p[I_CA_ON]
@@ -198,50 +234,49 @@ def convert(cfg: object) -> None:
                     else:
                         cp = a[I_CP]
 
-                    if _is_mach_on_grid(a[I_MACH]):
-                        comp_output[comp].append([
-                            a[I_MACH], vehicle_re, a[I_AOA],
-                            ca_off, ca_on, cn, cna,
-                            cp * INCHES_TO_M,
-                        ])
+                    comp_output[comp].append([
+                        a[I_MACH], full_vehicle_re[j], a[I_AOA],
+                        ca_off, ca_on, cn, cna,
+                        cp * INCHES_TO_M,
+                    ])
             else:
                 # First assembly (NoseCone): contribution = cumulative
                 for j in range(n):
                     a = asm[j]
-                    if _is_mach_on_grid(a[I_MACH]):
-                        comp_output[comp].append([
-                            a[I_MACH], vehicle_re, a[I_AOA],
-                            a[I_CA_OFF], a[I_CA_ON], a[I_CN], a[I_CNA],
-                            a[I_CP] * INCHES_TO_M,
-                        ])
+                    if max_mach is not None and a[I_MACH] > max_mach:
+                        continue
+                    comp_output[comp].append([
+                        a[I_MACH], full_vehicle_re[j], a[I_AOA],
+                        a[I_CA_OFF], a[I_CA_ON], a[I_CN], a[I_CNA],
+                        a[I_CP] * INCHES_TO_M,
+                    ])
 
             # Save raw cumulative rows (NOT component rows) for next iteration
             prev_rows = [list(r) for r in asm]
 
-    # Fill missing grid cells and write output
+    # Build target Re grid from the union of all actual Re values
+    all_re_values = set()
+    for comp in fore_to_aft:
+        for r in comp_output[comp]:
+            all_re_values.add(r[I_RE])
+    re_sorted = sorted(all_re_values)
+    re_target = np.geomspace(re_sorted[0], re_sorted[-1], N_RE_GRID)
+    print(f"\n  Re grid: {N_RE_GRID} log-spaced points, "
+          f"{re_sorted[0]:.0f} to {re_sorted[-1]:.0f}")
+
+    # Backfill NaN CPs, resample onto Re grid, and write output
     for comp in fore_to_aft:
         rows = comp_output[comp]
 
-        # Fill missing (Mach, Re, AoA) cells
+        # Backfill NaN CPs before resampling.  At AoA=0 (CN=0 for both
+        # assemblies) the cumulative CP from RASAero is undefined, so the
+        # moment-balance was marked NaN above.  Replace with the nearest
+        # valid AoA's CP at the same (Mach, Re).
         grid: dict[tuple[float, float], dict[float, list[float]]] = {}
         for r in rows:
             key = (r[I_MACH], r[I_RE])
             grid.setdefault(key, {})[r[I_AOA]] = r
 
-        all_aoa = sorted({r[I_AOA] for r in rows})
-        filled = 0
-        for key, aoa_map in grid.items():
-            for aoa in all_aoa:
-                if aoa not in aoa_map:
-                    nearest = min(aoa_map, key=lambda a: abs(a - aoa))
-                    new_row = list(aoa_map[nearest])
-                    new_row[I_AOA] = aoa
-                    rows.append(new_row)
-                    filled += 1
-
-        # Backfill NaN CPs.  At AoA=0 (CN=0 for both assemblies) the
-        # cumulative CP from RASAero is undefined, so the moment-balance
-        # was marked NaN above.  Replace with the nearest valid AoA's CP.
         for key, aoa_map in grid.items():
             for aoa, row in aoa_map.items():
                 if math.isnan(row[I_CP]):
@@ -253,6 +288,8 @@ def convert(cfg: object) -> None:
                     if nearest is not None:
                         row[I_CP] = aoa_map[nearest][I_CP]
 
+        # Resample onto regular Re grid
+        rows = _resample_re(rows, re_target)
         rows.sort(key=lambda r: (r[I_MACH], r[I_RE], r[I_AOA]))
 
         # Write CSV — 8 columns, CN_alpha_per_rad appended after CP_m
@@ -264,8 +301,7 @@ def convert(cfg: object) -> None:
             for r in rows:
                 writer.writerow([r[0], r[1], r[2], r[3], r[4], r[5], r[7], r[6]])
 
-        extra = f" (filled {filled})" if filled else ""
-        print(f"  {comp:>10}: {len(rows)} rows{extra} -> {dst_path}")
+        print(f"  {comp:>10}: {len(rows)} rows -> {dst_path}")
 
     # --- Whole-vehicle CSV (from full-vehicle assembly = aftmost component) ---
     full_vehicle_comp = AFT_COMPONENT_ORDER[0]  # aftmost = full vehicle
@@ -275,15 +311,16 @@ def convert(cfg: object) -> None:
         if path is None:
             continue
         raw = _load_altitude_file(path)
-        vehicle_re = statistics.median(r[I_RE] for r in raw)
         for r in raw:
-            if _is_mach_on_grid(r[I_MACH]):
-                wv_rows.append([
-                    r[I_MACH], vehicle_re, r[I_AOA],
-                    r[I_CA_OFF], r[I_CA_ON], r[I_CN],
-                    r[I_CP] * INCHES_TO_M, r[I_CNA],
-                ])
+            if max_mach is not None and r[I_MACH] > max_mach:
+                continue
+            wv_rows.append([
+                r[I_MACH], r[I_RE], r[I_AOA],
+                r[I_CA_OFF], r[I_CA_ON], r[I_CN],
+                r[I_CP] * INCHES_TO_M, r[I_CNA],
+            ])
 
+    wv_rows = _resample_re(wv_rows, re_target)
     wv_rows.sort(key=lambda r: (r[0], r[1], r[2]))
     wv_path = dst_dir.parent / "vehicle-aero-table.csv"
     with open(wv_path, "w", newline="") as f:
