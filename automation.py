@@ -170,8 +170,9 @@ class RASAero():
 
             except Exception as e:
                 if attempt == attempts - 1:
-                    print("MAXIMUM RASAERO ATTEMPTS REACHED. EXITING.")
-                    sys.exit(1)
+                    raise RuntimeError(
+                        "Maximum RASAero automation attempts reached."
+                    ) from e
     
     def getElementText(self, parent, tag):
         element = parent.find(tag)
@@ -277,7 +278,8 @@ class RASAero():
             if v <= timeBase:
                 snapped = v
         if snapped != timeBase:
-            print(f"Time base {timeBase} snapped to {snapped}")
+            import warnings as _w
+            _w.warn(f"Time base {timeBase} snapped to {snapped}")
 
         downPresses = {0.01: 0, 0.1: 1, 0.5: 2, 1.0: 3}[snapped]
 

@@ -40,7 +40,7 @@ RASAero.simulationDelay__s = 5.0     # long-burning motor — simulation takes l
 **Prerequisites:** Python 3.10+, Windows, RASAero II installed.
 
 ```
-pip install click pyyaml numpy pandas scipy pywinauto keyboard Pillow
+pip install click pyyaml numpy pandas scipy pywinauto keyboard Pillow rich
 ```
 
 
@@ -49,7 +49,7 @@ pip install click pyyaml numpy pandas scipy pywinauto keyboard Pillow
 ### Full pipeline
 
 ```
-python -m pyrasaero run <simulation.yaml>
+python . run <simulation.yaml>
 ```
 
 Reads the simulation YAML, generates a CDX1 from the vehicle config, drives RASAero II to run a flight simulation first, then uses the simulated flight envelope (apogee and peak Mach) to determine the aeroplot export altitude grid and Mach cap. The cumulative aeroplot exports are converted into per-component LFS aero tables with a properly resolved Reynolds number axis (see [Aerodynamic Table Format](#aerodynamic-table-format)). The flight simulation CSV is reformatted to SI units.
@@ -64,7 +64,7 @@ Reads the simulation YAML, generates a CDX1 from the vehicle config, drives RASA
 ### Write CDX1 only
 
 ```
-python -m pyrasaero write-cdx1 <simulation.yaml>
+python . write-cdx1 <simulation.yaml>
 ```
 
 Generates a CDX1 file from the vehicle and simulation config without running RASAero. Useful for manual inspection or development.

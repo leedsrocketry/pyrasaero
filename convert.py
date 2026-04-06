@@ -143,7 +143,7 @@ def convert(cfg: object, *, max_mach: float | None = None) -> None:
     vehicle_len_mm = cfg.components.length_mm
 
     if not src_dir.is_dir():
-        raise SystemExit(f"Source directory not found: {src_dir}")
+        raise FileNotFoundError(f"Source directory not found: {src_dir}")
 
     # Remove stale aero table CSVs from previous runs
     if dst_dir.is_dir():
@@ -166,7 +166,8 @@ def convert(cfg: object, *, max_mach: float | None = None) -> None:
         comp_alt_files[comp] = {alt: path for alt, path in af}
         missing = set(altitudes) - set(comp_alt_files[comp])
         if missing:
-            print(f"  WARNING: {comp} missing altitudes: {sorted(missing)}")
+            import warnings as _w
+            _w.warn(f"{comp} missing altitudes: {sorted(missing)}")
 
     dst_dir.mkdir(parents=True, exist_ok=True)
 
@@ -179,7 +180,7 @@ def convert(cfg: object, *, max_mach: float | None = None) -> None:
         for comp in fore_to_aft:
             path = comp_alt_files[comp].get(alt_ft)
             if path is None:
-                raise SystemExit(
+                raise ValueError(
                     f"{comp} missing altitude {alt_ft} — cannot proceed")
             asm_data[comp] = _load_altitude_file(path)
 
@@ -187,7 +188,7 @@ def convert(cfg: object, *, max_mach: float | None = None) -> None:
         n = len(asm_data[fore_to_aft[0]])
         for comp in fore_to_aft[1:]:
             if len(asm_data[comp]) != n:
-                raise SystemExit(
+                raise ValueError(
                     f"Row count mismatch at alt={alt_ft}: "
                     f"{fore_to_aft[0]} has {n}, {comp} has {len(asm_data[comp])}"
                 )
