@@ -38,7 +38,7 @@ COL_CA_OFF = 5
 COL_CA_ON = 6
 COL_CN = 8
 COL_CNALPHA = 11
-COL_CP = 13  # "CP (0 to 4 deg)" — linearised Barrowman CP, paired with CNα
+COL_CP = 12  # "CP" — Barrowman CP, paired with CNα
 COL_RE = 14
 
 # Aft-to-fore component order.  Each entry names the aftmost component
@@ -218,7 +218,7 @@ def convert(cfg: object, *, max_mach: float | None = None) -> None:
 
                     if abs(cna) > CNALPHA_EPS:
                         # Moment balance using CNα, consistent with the
-                        # linearised CP (column 13, "CP (0 to 4 deg)").
+                        # Barrowman CP (column 12, "CP").
                         # Both are Barrowman quantities: the telescope
                         # Σ(CNα_i × CP_i) = CNα_total × CP_total holds.
                         if abs(a[I_CP]) < 1e-6 and abs(p[I_CP]) < 1e-6:
