@@ -542,7 +542,7 @@ class RASAero():
         self.addElement(launchsite, "RodAngle", self._rnd(90 - self.simulation.launchInclination__deg))
         self.addElement(launchsite, "RodLength", self.m2ft(self.simulation.launchRailLength__m))
         self.addElement(launchsite, "Temperature", self.degC2degF(self.simulation.launchsiteTemperature__degC))
-        self.addElement(launchsite, "WindSpeed", self.ms2mph(self.simulation.windSpeed__m_s))
+        self.addElement(launchsite, "WindSpeed", 0)  # aeroplots must be generated in still air
 
         # --- Recovery ---
         if rocket.drogueCD is not None or rocket.mainCD is not None:
