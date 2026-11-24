@@ -236,6 +236,17 @@ def run(
 
     rocket = _build_rocket(cfg)
 
+    if cfg.flight_sim_output_path is None:
+        _error_exit("verification.reference_trajectory must be set in the "
+                    "simulation YAML (the flight envelope is read from it).")
+    # Fail early, before any GUI automation, if RASAero can't find the motor
+    RASAero.checkMotor(cfg.rasaero_vehicle.motor)
+    # pyrasaero kills RASAero between steps, which would lose unsaved work
+    # in a copy the user has open
+    if RASAero.isRunning():
+        _error_exit("RASAero II is already running. Save your work and close "
+                    "it first: pyrasaero needs sole control of RASAero.")
+
     simulation = Simulation(
         modifiedBarrowmanFlag=cfg.rasaero_sim.modified_barrowman,
         turbulenceFlag=cfg.rasaero_sim.turbulence,
@@ -261,7 +272,7 @@ def run(
 
     display.start()
 
-    ra = RASAero(cdx1_path, flight_sim_path, flight_sim_path, aeroplots_path)
+    ra = RASAero(cdx1_path, flight_sim_path, aeroplots_path)
     try:
         display.update_status("Writing CDX1 file...")
         ra.exportRocketDefinition(rocket, simulation)
@@ -281,23 +292,33 @@ def run(
         max_altitude = math.ceil(max_altitude / altitude_step) * altitude_step
 
         if not aeroplots_convert:
-            display.update_status(
-                f"Exporting aeroplots: 0\u2013{max_altitude:.0f} m "
-                f"(step {altitude_step:.0f} m), Mach cap {max_mach:.0f}..."
-            )
             altitudes = list(range(0, int(max_altitude) + 1, int(altitude_step)))
-            ra.exportAeroPlots(altitudes)
+            grid = (f"0\u2013{max_altitude:.0f} m, step {altitude_step:.0f} m, "
+                    f"Mach cap {max_mach:.0f}")
+            display.update_status(f"Exporting aero plots ({grid})...")
+
+            def _progress(done, total, component, altitude):
+                display.update_status(
+                    f"Exporting aero plots ({grid}): {done}/{total} done, "
+                    f"last {component} at {altitude:.0f} m")
+
+            ra.exportAeroPlots(altitudes, progress=_progress)
     except KeyboardInterrupt:
         _stop_warning_capture(_orig_warn)
         display.stop()
         console.print()
         console.print("Closing RASAero II...")
-        RASAero.killAll()
         raise SystemExit(130)
     except Exception:
-        RASAero.killAll()
+        # The error panel only shows the message; keep the full traceback
+        import traceback
+        log = rasaero_data_dir / "last-error.log"
+        log.write_text(traceback.format_exc(), encoding="utf-8")
+        display.stop()
+        console.print(f"Full traceback saved to {log}")
         raise
     finally:
+        # Only pyrasaero's own RASAero can be running (checked above)
         RASAero.killAll()
 
     # --- Conversion ---
@@ -316,6 +337,31 @@ def run(
         f"Flight envelope: apogee {max_alt:.0f} m, peak Mach {max_mach_sim:.2f}"
     )
     console.print(f"Aero tables:  {cfg.aero_tables_dir}")
+    console.print()
+
+
+@main.command("import-cdx1")
+@click.argument("cdx1_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("-o", "--out-dir", type=click.Path(file_okay=False, path_type=Path),
+              default=None,
+              help="Output folder (default: <name>-pyrasaero/ next to the CDX1).")
+def import_cdx1(cdx1_file: Path, out_dir: Path | None) -> None:
+    """Create vehicle and simulation YAMLs from an existing RASAero CDX1."""
+    from importer import cdx1_to_yaml
+
+    if out_dir is None:
+        out_dir = cdx1_file.resolve().parent / f"{cdx1_file.stem}-pyrasaero"
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        vehicle_path, sim_path = cdx1_to_yaml(cdx1_file, out_dir)
+
+    _print_warnings([str(w.message) for w in caught])
+    console.print()
+    console.print(f"Vehicle YAML:    {vehicle_path}")
+    console.print(f"Simulation YAML: {sim_path}")
+    console.print()
+    console.print(f"Next: python <pyrasaero> run \"{sim_path}\"")
     console.print()
 
 
@@ -355,7 +401,7 @@ def write_cdx1(simulation_yaml: Path) -> None:
     display.update_status("Writing CDX1 file...")
     display.start()
 
-    ra = RASAero(cdx1_path, dummy, dummy, dummy)
+    ra = RASAero(cdx1_path, dummy, dummy)
     ra.exportRocketDefinition(rocket, simulation)
 
     _stop_warning_capture(_orig_warn)
