@@ -216,12 +216,17 @@ def main() -> None:
 @click.option("--aeroplots-convert", is_flag=True,
               help="Skip RASAero aero plots export; only convert existing CSVs. "
                    "Flight simulation export still runs.")
+@click.option("--resume", is_flag=True,
+              help="Keep complete aeroplots CSVs from an interrupted run and "
+                   "export only the missing ones. Use only if the vehicle is "
+                   "unchanged since that run.")
 @click.option("--time-base", type=float, default=0.01,
               help="Flight simulation export time step in seconds (default 0.01). "
                    "Snapped down to nearest valid value: 0.01, 0.1, 0.5, or 1.0.")
 def run(
     simulation_yaml: Path,
     aeroplots_convert: bool,
+    resume: bool,
     time_base: float,
 ) -> None:
     """Run the full pyrasaero pipeline: CDX1 generation, RASAero export, conversion.
@@ -302,7 +307,7 @@ def run(
                     f"Exporting aero plots ({grid}): {done}/{total} done, "
                     f"last {component} at {altitude:.0f} m")
 
-            ra.exportAeroPlots(altitudes, progress=_progress)
+            ra.exportAeroPlots(altitudes, progress=_progress, resume=resume)
     except KeyboardInterrupt:
         _stop_warning_capture(_orig_warn)
         display.stop()
