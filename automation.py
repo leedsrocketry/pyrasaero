@@ -337,8 +337,20 @@ class RASAero():
 
     def _visibleWindows(self):
         """Visible top-level and owned windows of this RASAero process."""
+        from pywinauto.controls.hwndwrapper import InvalidWindowHandle
         pid = self.app.process
-        return [w for w in Desktop(backend="win32").windows()
+        # Desktop.windows() wraps every top-level window on the desktop, and
+        # raises if any of them (in any app) closes between being listed and
+        # being wrapped, so retry on that race.
+        for attempt in range(10):
+            try:
+                windows = Desktop(backend="win32").windows()
+                break
+            except InvalidWindowHandle:
+                if attempt == 9:
+                    raise
+                sleep(0.1)
+        return [w for w in windows
                 if self._ifAlive(lambda: w.process_id() == pid and w.is_visible(), False)]
 
     @staticmethod
@@ -660,7 +672,7 @@ class RASAero():
 
         out.to_csv(outputPath, index=False)
     
-    def exportAeroPlots(self, altitudes, progress=None):
+    def exportAeroPlots(self, altitudes, progress=None, resume=False):
         """Export aero plot CSVs for each cumulative assembly and altitude.
 
         Components are stripped aft-to-fore from a working copy of the CDX1,
@@ -668,9 +680,13 @@ class RASAero():
         RASAero is restarted for every export so the previous Mach-Alt table
         is dropped.  *progress*, if given, is called as
         ``progress(done, total, component, altitude)`` after each export.
+
+        With *resume*, existing complete CSVs are kept and their exports
+        skipped; otherwise all old aeroplots CSVs are deleted first.  Only
+        resume when the vehicle is unchanged since those CSVs were written.
         """
         aeroDir = os.path.dirname(self.aeroPlotsFullPath)
-        if os.path.isdir(aeroDir):
+        if not resume and os.path.isdir(aeroDir):
             for f in os.listdir(aeroDir):
                 if f.lower().startswith("aeroplots") and f.lower().endswith(".csv"):
                     os.remove(os.path.join(aeroDir, f))
@@ -685,6 +701,14 @@ class RASAero():
         try:
             for component in self.aftComponentOrder:
                 for altitude in altitudes:
+                    outPath = f"{csvBase}-{component.lower()}-{altitude:.0f}{csvExt}"
+                    if (resume and os.path.isfile(outPath)
+                            and self._aeroCsvComplete(outPath)):
+                        done += 1
+                        if progress:
+                            progress(done, total, component, altitude)
+                        continue
+
                     # Replace the Mach-Alt table with this altitude
                     self.removeCDX1Element(workingPath, "MachAlt")
                     root = ET.parse(workingPath).getroot()
@@ -693,7 +717,6 @@ class RASAero():
                         self.addElement(machalt, "Item", f"{mach}, {self.m2ft(altitude)}")
                     self.writeCDX1File(root, workingPath)
 
-                    outPath = f"{csvBase}-{component.lower()}-{altitude:.0f}{csvExt}"
                     self._start(workingPath)
                     try:
                         plots = self._launchWindow(
